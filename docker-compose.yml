@@ -22,6 +22,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
   router:
     build: ./router
     container_name: ai-router
@@ -36,6 +37,8 @@ services:
       - "8000:8000"
     expose:
       - "8000"
+    volumes:
+      - ./data/faiss:/app/faiss
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
