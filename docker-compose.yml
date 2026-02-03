@@ -1,8 +1,36 @@
+# =============================================================================
+# AI Stack - Docker Compose Configuration
+# =============================================================================
+#
+# Services:
+#   1. Ollama: Local LLM inference engine with GPU support
+#   2. Smart Router: Intelligent query routing with FAISS memory
+#   3. OpenWebUI: Web interface for interacting with AI models
+#   4. Whisper: Speech-to-text transcription
+#
+# Data stored in ./data/ for easy backup:
+#   - data/ollama/       Model weights (~20GB+)
+#   - data/openwebui/    User accounts, chat history
+#   - data/smart-router/ FAISS index, SQLite database
+#
+# Usage:
+#   Start:  docker compose up -d
+#   Stop:   docker compose down
+#   Logs:   docker compose logs -f [service]
+#
+# =============================================================================
+
 networks:
   ai-net:
     driver: bridge
 
 services:
+  # ---------------------------------------------------------------------------
+  # Ollama - Local LLM Inference Engine
+  # ---------------------------------------------------------------------------
+  # Runs large language models locally with GPU acceleration.
+  # OLLAMA_KEEP_ALIVE=-1 keeps models loaded indefinitely.
+  # ---------------------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -24,6 +52,17 @@ services:
               count: all
               capabilities: [gpu]
 
+  # ---------------------------------------------------------------------------
+  # Smart Router - Intelligent Query Routing with Memory
+  # ---------------------------------------------------------------------------
+  # Routes queries to the appropriate model based on content analysis.
+  # Provides conversation memory using FAISS + SQLite.
+  #
+  # Features:
+  #   - Keyword-based query classification
+  #   - FAISS-powered semantic search for context retrieval
+  #   - Cross-session conversation memory
+  # ---------------------------------------------------------------------------
   router:
     build: ./smart-router
     container_name: ai-router
@@ -31,13 +70,28 @@ services:
     depends_on: [ollama]
     networks: [ai-net]
     environment:
+      # Ollama connection
       - OLLAMA_BASE_URL=http://ollama:11434
+      # Model assignments (quantized for 12GB VRAM)
       - CODING_MODEL=deepseek-coder:6.7b-instruct-q4_K_M
       - SUMMARY_MODEL=qwen2.5:7b-instruct-q4_K_M
       - GENERAL_MODEL=llama3.1:8b-instruct-q4_K_M
+      # Embedding model for FAISS memory
+      - EMBEDDING_MODEL=nomic-embed-text
+      # Data directory (inside container, mounted below)
+      - DATA_DIR=/data
     ports:
       - "8000:8000"
+    volumes:
+      # Persist FAISS index and SQLite database
+      - ./data/smart-router:/data
 
+  # ---------------------------------------------------------------------------
+  # OpenWebUI - Web Interface
+  # ---------------------------------------------------------------------------
+  # Connects to Smart Router for intelligent routing and memory.
+  # Access: http://localhost:3000
+  # ---------------------------------------------------------------------------
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: openwebui
@@ -47,11 +101,15 @@ services:
     ports:
       - "3000:8080"
     environment:
+      # Connect to Smart Router instead of Ollama directly
       OPENAI_API_BASE_URL: http://router:8000/v1
       OPENAI_API_KEY: local-ai
     volumes:
       - ./data/openwebui:/app/backend/data
 
+  # ---------------------------------------------------------------------------
+  # Whisper - Speech-to-Text
+  # ---------------------------------------------------------------------------
   whisper:
     build: ./whisper
     container_name: whisper
