@@ -12,32 +12,33 @@ A self-hosted AI stack with intelligent query routing, featuring:
 
 ```
 ai-stack/
-├── docker-compose.yml          # Main orchestration file
-├── bootstrap.sh                # Initial setup script
-├── init_models.py              # Model initialization & registration
-├── ai-on.sh                    # Manual start script (portable)
-├── ai-off.sh                   # Manual stop + shutdown script
-├── ai-stack.service            # Systemd service file
+├── docker-compose.yml            # Main orchestration file
+├── bootstrap.sh                  # Initial setup script
+├── init_models.py                # Model initialization & registration
+├── ai-on.sh                      # Manual start script
+├── ai-off.sh                     # Manual stop + shutdown script
+├── install-service.sh            # Systemd service installer
+├── ai-stack.service.template     # Service template (portable)
 ├── README.md
 │
-├── ollama/                     # Ollama configuration
-│   ├── models.env              # Model name mappings
-│   ├── models.yaml             # Model settings (temp, system prompts)
-│   └── Modelfile.tmpl          # Template for custom models
+├── ollama/                       # Ollama configuration
+│   ├── models.env                # Model name mappings
+│   ├── models.yaml               # Model settings (temp, system prompts)
+│   └── Modelfile.tmpl            # Template for custom models
 │
-├── smart-router/               # Intelligent routing service
+├── smart-router/                 # Intelligent routing service
 │   ├── Dockerfile
-│   ├── main.py                 # Router logic with keyword classification
+│   ├── main.py                   # Router logic with keyword classification
 │   └── requirements.txt
 │
-├── whisper/                    # Speech-to-text service
+├── whisper/                      # Speech-to-text service
 │   ├── Dockerfile
 │   ├── app.py
 │   └── requirements.txt
 │
-└── data/                       # Persistent data (gitignored)
-    ├── ollama/                 # Model weights & rendered configs
-    └── openwebui/              # Chat history & settings
+└── data/                         # Persistent data (gitignored)
+    ├── ollama/                   # Model weights & rendered configs
+    └── openwebui/                # Chat history & settings
 ```
 
 ---
@@ -59,16 +60,16 @@ ai-stack/
 
 | Select | Routes To | Use For |
 |--------|-----------|---------|
-| `auto` | Auto-detect | Let router decide |
-| `deepseek` | deepseek-coder:6.7b-instruct-q4_K_M | Coding tasks |
-| `qwen` | qwen2.5:7b-instruct-q4_K_M | Summarization |
-| `llama3` | llama3.1:8b-instruct-q4_K_M | General chat |
+| auto | Auto-detect | Let router decide |
+| deepseek | deepseek-coder:6.7b-instruct-q4_K_M | Coding tasks |
+| qwen | qwen2.5:7b-instruct-q4_K_M | Summarization |
+| llama3 | llama3.1:8b-instruct-q4_K_M | General chat |
 
 **Auto-Detection Keywords:**
 
-- **Coding** → `code`, `function`, `debug`, `python`, `javascript`, `api`, `implement`, etc.
-- **Summarization** → `summarize`, `tldr`, `brief`, `key points`, `condense`, etc.
-- **General** → Everything else
+- **Coding**: code, function, debug, python, javascript, api, implement, etc.
+- **Summarization**: summarize, tldr, brief, key points, condense, etc.
+- **General**: Everything else
 
 ---
 
@@ -80,33 +81,45 @@ ai-stack/
 - Python 3.x
 - NVIDIA GPU with 12GB+ VRAM
 
-### 1. Clone & Bootstrap
+### 1. Bootstrap (First-time Setup)
 
 ```bash
 cd ~/ai-stack
 ./bootstrap.sh
 ```
 
-This will:
-- Create Python virtual environment
-- Install dependencies
-- Start Ollama
-- Pull and register models
-- Start all services
+**What bootstrap.sh does:**
+
+1. Checks for Docker and Python
+2. Creates Python virtual environment (.venv/)
+3. Installs Python dependencies (pyyaml, jinja2, requests, etc.)
+4. Starts Ollama container
+5. Runs init_models.py to:
+   - Pull base models from Ollama registry
+   - Render custom Modelfiles with system prompts
+   - Register model aliases (deepseek, qwen, llama3)
+6. Starts all remaining services (router, openwebui, whisper)
 
 ### 2. Enable Auto-Start (Systemd)
 
+Run the installer script (auto-detects paths):
+
 ```bash
-# Copy service file
-sudo cp ~/ai-stack/ai-stack.service /etc/systemd/system/
+./install-service.sh
+```
 
-# Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable ai-stack.service
-sudo systemctl start ai-stack.service
+This will:
+- Detect your install directory and username
+- Generate the systemd service file
+- Install and enable the service
 
-# Check status
-sudo systemctl status ai-stack.service
+**Manual commands after installation:**
+
+```bash
+sudo systemctl start ai-stack    # Start now
+sudo systemctl stop ai-stack     # Stop
+sudo systemctl status ai-stack   # Check status
+sudo systemctl disable ai-stack  # Disable auto-start
 ```
 
 ### 3. Access
@@ -140,22 +153,21 @@ docker compose restart router
 
 ## Model Configuration
 
-### Change Models
+### Current Models
 
-Edit `docker-compose.yml` router environment:
+Configured in docker-compose.yml:
 
 ```yaml
 environment:
-  - CODING_MODEL=qwen3-coder:7b       # Change coding model
-  - SUMMARY_MODEL=qwen3:7b            # Change summary model
-  - GENERAL_MODEL=llama4:8b           # Change general model
+  - CODING_MODEL=deepseek-coder:6.7b-instruct-q4_K_M
+  - SUMMARY_MODEL=qwen2.5:7b-instruct-q4_K_M
+  - GENERAL_MODEL=llama3.1:8b-instruct-q4_K_M
 ```
 
-Then restart:
+### Change Models
 
-```bash
-docker compose up -d router
-```
+1. Edit docker-compose.yml router environment
+2. Restart router: docker compose up -d router
 
 ### Pull New Models
 
