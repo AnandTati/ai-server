@@ -29,13 +29,13 @@ A self-hosted AI stack with intelligent query routing and conversation memory, f
 │              │   (:8000)     │         (speech-to-text)                     │
 │              └───────┬───────┘                                              │
 │                      │                                                      │
-│         ┌────────────┼────────────┐                                         │
-│         ▼            ▼            ▼                                         │
-│    ┌─────────┐ ┌──────────┐ ┌─────────┐                                     │
-│    │deepseek │ │  qwen    │ │ llama3  │                                     │
-│    │ (code)  │ │(summary) │ │(general)│                                     │
-│    └────┬────┘ └────┬─────┘ └────┬────┘                                     │
-│         └───────────┼────────────┘                                          │
+│                ┌───────────┴───────────┐                                     │
+│                      ▼                                                      │
+│         ┌─────────────┐       ┌─────────────┐                                │
+│         │ deepseek-r1 │       │    qwen3    │                                │
+│         │  (coding)   │       │  (general)  │                                │
+│         └──────┬──────┘       └──────┬──────┘                                │
+│                └───────────┬─────────┘                                       │
 │                     ▼                                                       │
 │              ┌───────────────┐                                              │
 │              │    Ollama     │                                              │
@@ -81,9 +81,9 @@ A self-hosted AI stack with intelligent query routing and conversation memory, f
 │                              ▼                                            │
 │  3. ROUTE TO MODEL                                                        │
 │     ┌─────────────────────────────────────────────────────────────┐       │
-│     │  CODING ─────► deepseek-coder:6.7b-instruct-q4_K_M          │       │
-│     │  SUMMARY ────► qwen2.5:7b-instruct-q4_K_M                   │       │
-│     │  GENERAL ────► llama3.1:8b-instruct-q4_K_M                  │       │
+│     │  CODING ─────► deepseek-r1:14b          │       │
+│     │  SUMMARY ────► qwen3:8b                   │       │
+│     │  GENERAL ────► qwen3:8b                  │       │
 │     └─────────────────────────────────────────────────────────────┘       │
 │                              │                                            │
 │                              ▼                                            │
@@ -221,6 +221,9 @@ ai-stack/
 │   ├── Dockerfile
 │   └── main.py                   # Router logic with FAISS memory
 │
+├── tests/                      # Test suite
+│   └── run_tests.sh             # Router and memory tests
+│
 ├── whisper/                      # Speech-to-text service
 │   └── Dockerfile
 │
@@ -252,9 +255,8 @@ ai-stack/
 | Select | Routes To | Use For |
 |--------|-----------|---------|
 | auto | Auto-detect | Let router decide |
-| deepseek | deepseek-coder:6.7b-instruct-q4_K_M | Coding tasks |
-| qwen | qwen2.5:7b-instruct-q4_K_M | Summarization |
-| llama3 | llama3.1:8b-instruct-q4_K_M | General chat |
+| deepseek | deepseek-r1:14b | Coding tasks |
+| qwen | qwen3:8b | General + Summarization |
 
 **Auto-Detection Keywords:**
 
@@ -318,9 +320,8 @@ chmod +x bootstrap.sh ai-on.sh ai-off.sh install-service.sh
 2. Installs Python dependencies
 3. Starts Ollama container
 4. Pulls required models:
-   - deepseek-coder:6.7b-instruct-q4_K_M (coding)
-   - qwen2.5:7b-instruct-q4_K_M (summarization)
-   - llama3.1:8b-instruct-q4_K_M (general)
+   - deepseek-r1:14b (coding)
+   - qwen3:8b (general + summarization)
    - nomic-embed-text (embeddings for FAISS)
 5. Registers model aliases
 6. Starts all services (router, openwebui, whisper)
@@ -394,9 +395,9 @@ Configured in `docker-compose.yml`:
 
 ```yaml
 environment:
-  - CODING_MODEL=deepseek-coder:6.7b-instruct-q4_K_M
-  - SUMMARY_MODEL=qwen2.5:7b-instruct-q4_K_M
-  - GENERAL_MODEL=llama3.1:8b-instruct-q4_K_M
+  - CODING_MODEL=deepseek-r1:14b
+  # Note: GENERAL_MODEL handles both general and summarization
+  - GENERAL_MODEL=qwen3:8b
   - EMBEDDING_MODEL=nomic-embed-text
 ```
 
@@ -457,6 +458,24 @@ curl http://localhost:8000/health
 ```
 
 ---
+
+---
+
+## Testing
+
+Run the test suite to verify routing and memory:
+
+```bash
+# Run all tests
+./tests/run_tests.sh
+```
+
+**Tests include:**
+- Health check
+- Coding query routing (-> deepseek-r1)
+- General query routing (-> qwen3)
+- Summarization query routing (-> qwen3)
+- Memory stats verification
 
 ## Backup & Restore
 

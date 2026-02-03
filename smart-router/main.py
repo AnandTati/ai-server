@@ -2,7 +2,11 @@
 Smart Router for AI Stack
 ==========================
 A FastAPI service that intelligently routes queries to appropriate Ollama models
-based on query classification (coding, summarization, general).
+based on query classification.
+
+2-Model Setup (optimized for 12GB VRAM):
+- CODING_MODEL: deepseek-r1:14b for coding + reasoning
+- GENERAL_MODEL: qwen3:8b for general chat + summarization
 
 Features:
 - Keyword-based query classification
@@ -12,14 +16,15 @@ Features:
 
 Environment Variables:
 - OLLAMA_BASE_URL: Ollama API endpoint (default: http://ollama:11434)
-- CODING_MODEL: Model for coding queries
-- SUMMARY_MODEL: Model for summarization
-- GENERAL_MODEL: Model for general queries
+- CODING_MODEL: Model for coding queries (default: deepseek-r1:14b)
+# Note: Summarization uses GENERAL_MODEL (2-model setup)
+- GENERAL_MODEL: Model for general + summarization (default: qwen3:8b)
 - EMBEDDING_MODEL: Model for generating embeddings (default: nomic-embed-text)
 - DATA_DIR: Directory for persistent storage (default: /data)
 """
 
 import os
+import re
 import json
 import sqlite3
 import asyncio
@@ -34,6 +39,12 @@ import faiss
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
+
+def word_match(keyword: str, text: str) -> bool:
+    """Check if keyword exists as a whole word in text."""
+    pattern = r"\b" + re.escape(keyword.strip()) + r"\b"
+    return bool(re.search(pattern, text, re.IGNORECASE))
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -42,9 +53,8 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-CODING_MODEL = os.environ.get("CODING_MODEL", "deepseek-coder:6.7b-instruct-q4_K_M")
-SUMMARY_MODEL = os.environ.get("SUMMARY_MODEL", "qwen2.5:7b-instruct-q4_K_M")
-GENERAL_MODEL = os.environ.get("GENERAL_MODEL", "llama3.1:8b-instruct-q4_K_M")
+CODING_MODEL = os.environ.get("CODING_MODEL", "deepseek-r1:14b")
+GENERAL_MODEL = os.environ.get("GENERAL_MODEL", "qwen3:8b")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
@@ -58,7 +68,7 @@ EMBEDDING_DIM = 768  # nomic-embed-text dimension
 # =============================================================================
 
 CODING_KEYWORDS = [
-    "code", "function", "class", "program", "script", "debug", "error", "bug",
+    "code", "function", "program", "script", "debug", "error", "bug",
     "python", "javascript", "java", "rust", "golang", "c++", "sql", "html", "css",
     "api", "algorithm", "data structure", "compile", "syntax", "variable",
     "loop", "array", "list", "dictionary", "object", "method", "import",
@@ -297,13 +307,13 @@ def classify_query(messages: list) -> str:
     
     # Check for summarization keywords first (more specific)
     for keyword in SUMMARY_KEYWORDS:
-        if keyword in text:
+        if word_match(keyword, text):
             logger.info(f"Classified as SUMMARIZATION (keyword: {keyword})")
             return "summarization"
     
     # Check for coding keywords
     for keyword in CODING_KEYWORDS:
-        if keyword in text:
+        if word_match(keyword, text):
             logger.info(f"Classified as CODING (keyword: {keyword})")
             return "coding"
     
@@ -314,8 +324,9 @@ def get_model_for_classification(classification: str) -> str:
     """Map classification to model."""
     if classification == "coding":
         return CODING_MODEL
+    # Summarization also uses GENERAL_MODEL
     elif classification == "summarization":
-        return SUMMARY_MODEL
+        return GENERAL_MODEL
     return GENERAL_MODEL
 
 # =============================================================================
@@ -331,7 +342,7 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"[Router] Starting Smart Router...")
     logger.info(f"[Router] Ollama URL: {OLLAMA_BASE_URL}")
-    logger.info(f"[Router] Models - Coding: {CODING_MODEL}, Summary: {SUMMARY_MODEL}, General: {GENERAL_MODEL}")
+    logger.info(f"[Router] Models - Coding: {CODING_MODEL}, General: {GENERAL_MODEL} (2-model setup)")
     logger.info(f"[Router] Data Directory: {DATA_DIR}")
     
     memory = ConversationMemory(DATA_DIR)
@@ -362,7 +373,6 @@ async def list_models():
         "data": [
             {"id": "auto", "object": "model", "created": 0, "owned_by": "smart-router"},
             {"id": CODING_MODEL, "object": "model", "created": 0, "owned_by": "ollama"},
-            {"id": SUMMARY_MODEL, "object": "model", "created": 0, "owned_by": "ollama"},
             {"id": GENERAL_MODEL, "object": "model", "created": 0, "owned_by": "ollama"},
         ]
     }
@@ -374,6 +384,10 @@ async def chat_completions(request: Request):
     
     body = await request.json()
     messages = body.get("messages", [])
+    
+    # Validate messages
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages cannot be empty")
     requested_model = body.get("model", "auto")
     stream = body.get("stream", False)
     user_id = body.get("user", "default")
@@ -436,10 +450,11 @@ async def chat_completions(request: Request):
     # Forward to Ollama
     body["model"] = target_model
     
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        if stream:
-            async def stream_response():
-                full_response = ""
+    if stream:
+        async def stream_response():
+            full_response = ""
+            # Client must be created inside generator to stay open during streaming
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_BASE_URL}/v1/chat/completions",
@@ -458,18 +473,19 @@ async def chat_completions(request: Request):
                         except:
                             pass
                         yield chunk
-                
-                if memory and full_response:
-                    await memory.store_message(
-                        content=full_response,
-                        role="assistant",
-                        user_id=user_id,
-                        model_used=target_model,
-                        query_type=classification
-                    )
             
-            return StreamingResponse(stream_response(), media_type="text/event-stream")
-        else:
+            if memory and full_response:
+                await memory.store_message(
+                    content=full_response,
+                    role="assistant",
+                    user_id=user_id,
+                    model_used=target_model,
+                    query_type=classification
+                )
+        
+        return StreamingResponse(stream_response(), media_type="text/event-stream")
+    else:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
                 f"{OLLAMA_BASE_URL}/v1/chat/completions",
                 json=body,

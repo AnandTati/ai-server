@@ -8,6 +8,10 @@
 #   3. OpenWebUI: Web interface for interacting with AI models
 #   4. Whisper: Speech-to-text transcription
 #
+# Models (2-model setup for 12GB VRAM):
+#   - deepseek-r1:14b    - Coding + reasoning (~9GB)
+#   - qwen3:8b           - General + summarization (~5GB)
+#
 # Data stored in ./data/ for easy backup:
 #   - data/ollama/       Model weights (~20GB+)
 #   - data/openwebui/    User accounts, chat history
@@ -56,7 +60,7 @@ services:
   # Smart Router - Intelligent Query Routing with Memory
   # ---------------------------------------------------------------------------
   # Routes queries to the appropriate model based on content analysis.
-  # Provides conversation memory using FAISS + SQLite.
+  # 2-model setup: coding -> deepseek-r1, general/summary -> qwen3
   #
   # Features:
   #   - Keyword-based query classification
@@ -72,10 +76,11 @@ services:
     environment:
       # Ollama connection
       - OLLAMA_BASE_URL=http://ollama:11434
-      # Model assignments (quantized for 12GB VRAM)
-      - CODING_MODEL=deepseek-coder:6.7b-instruct-q4_K_M
-      - SUMMARY_MODEL=qwen2.5:7b-instruct-q4_K_M
-      - GENERAL_MODEL=llama3.1:8b-instruct-q4_K_M
+      # 2-model setup (optimized for 12GB VRAM)
+      # DeepSeek-R1 14B: Advanced reasoning + coding
+      - CODING_MODEL=deepseek-r1:14b
+      # Qwen3 8B: General chat and summarization
+      - GENERAL_MODEL=qwen3:8b
       # Embedding model for FAISS memory
       - EMBEDDING_MODEL=nomic-embed-text
       # Data directory (inside container, mounted below)

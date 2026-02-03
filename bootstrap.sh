@@ -10,18 +10,17 @@
 # What it does:
 #   1. Creates data directories for persistent storage
 #   2. Starts Ollama service temporarily
-#   3. Pulls LLM models for different task types:
-#      - deepseek-coder: For programming and code-related tasks
-#      - qwen2.5: For summarization and text condensation
-#      - llama3.1: For general conversation and Q&A
+#   3. Pulls LLM models (2-model optimized setup):
+#      - deepseek-r1:14b  - For coding and complex reasoning
+#      - qwen3:8b         - For general chat and summarization
 #   4. Pulls embedding model for FAISS memory:
-#      - nomic-embed-text: Generates 768-dim vectors for semantic search
+#      - nomic-embed-text - Generates 768-dim vectors for semantic search
 #   5. Stops Ollama service
 #
 # Requirements:
 #   - Docker and Docker Compose installed
-#   - NVIDIA GPU with drivers (for GPU acceleration)
-#   - ~25GB disk space for models
+#   - NVIDIA GPU with 12GB+ VRAM
+#   - ~20GB disk space for models
 #   - Internet connection for downloading models
 #
 # Usage:
@@ -33,35 +32,31 @@
 set -euo pipefail
 
 # Get the directory where this script is located
-# This makes the script work regardless of where it is called from
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # =============================================================================
-# Model Configuration
+# Model Configuration (2-Model Setup)
 # =============================================================================
-# These model names MUST match the docker-compose.yml environment variables.
-# If you change models here, update docker-compose.yml to match.
+# Optimized for 12GB VRAM - only 2 LLM models needed
+# These MUST match docker-compose.yml environment variables
 
-# Coding model: DeepSeek Coder 6.7B (Q4_K_M quantization)
-# - Optimized for code generation, debugging, and programming tasks
-# - Q4_K_M quantization: Good balance of quality and VRAM usage (~4GB)
-CODING_MODEL="deepseek-coder:6.7b-instruct-q4_K_M"
+# Coding model: DeepSeek-R1 14B
+# - Advanced reasoning capabilities (rivals O3/Gemini 2.5 Pro)
+# - Excellent for code generation, debugging, algorithms
+# - ~9GB VRAM
+CODING_MODEL="deepseek-r1:14b"
 
-# Summarization model: Qwen 2.5 7B (Q4_K_M quantization)
-# - Excellent at condensing long text into concise summaries
-# - Good instruction-following for structured outputs
-SUMMARY_MODEL="qwen2.5:7b-instruct-q4_K_M"
-
-# General model: Llama 3.1 8B (Q4_K_M quantization)
-# - Well-rounded model for general conversation
-# - Good at reasoning, Q&A, and creative tasks
-GENERAL_MODEL="llama3.1:8b-instruct-q4_K_M"
+# General model: Qwen3 8B
+# - Handles general conversation AND summarization
+# - Strong multilingual support
+# - ~5GB VRAM
+GENERAL_MODEL="qwen3:8b"
 
 # Embedding model: Nomic Embed Text
 # - Generates 768-dimensional vectors for semantic similarity
 # - Used by FAISS for conversation memory retrieval
-# - Lightweight (~274MB) and fast
+# - Lightweight (~274MB)
 EMBEDDING_MODEL="nomic-embed-text"
 
 # =============================================================================
@@ -83,7 +78,7 @@ print_error() {
     echo "[ERROR] $1" >&2
 }
 
-# Wait for Ollama to be ready (accepts connections)
+# Wait for Ollama to be ready
 wait_for_ollama() {
     print_info "Waiting for Ollama to be ready..."
     local max_attempts=30
@@ -125,19 +120,12 @@ pull_model() {
 
 print_status "AI Stack Bootstrap"
 
-# Check for Docker
 command -v docker >/dev/null || { print_error "Docker is not installed"; exit 1; }
-
-# Check for Docker Compose
 docker compose version >/dev/null 2>&1 || { print_error "Docker Compose not available"; exit 1; }
 
 # =============================================================================
 # Create Data Directories
 # =============================================================================
-# These directories store all persistent data:
-# - data/ollama:       Downloaded model weights (~20GB+)
-# - data/openwebui:    User accounts and chat history
-# - data/smart-router: FAISS index and SQLite database for conversation memory
 
 print_status "Creating Data Directories"
 
@@ -153,7 +141,6 @@ print_info "  - data/smart-router/  (FAISS memory)"
 # =============================================================================
 # Start Ollama Service
 # =============================================================================
-# We only need Ollama running to pull models.
 
 print_status "Starting Ollama Service"
 
@@ -165,20 +152,19 @@ if \! wait_for_ollama; then
 fi
 
 # =============================================================================
-# Pull AI Models
+# Pull AI Models (2-Model Setup)
 # =============================================================================
-# Models are pulled in order of importance.
 
 print_status "Pulling AI Models"
-print_info "This will download approximately 20-25GB of model data."
+print_info "2-model setup optimized for 12GB VRAM"
+print_info "This will download approximately 15GB of model data."
 
 # Pull embedding model first (smallest, needed for memory)
 pull_model "$EMBEDDING_MODEL" "Embedding (FAISS memory)"
 
 # Pull LLM models
-pull_model "$CODING_MODEL" "Coding"
-pull_model "$SUMMARY_MODEL" "Summarization"
-pull_model "$GENERAL_MODEL" "General"
+pull_model "$CODING_MODEL" "Coding + Reasoning"
+pull_model "$GENERAL_MODEL" "General + Summarization"
 
 # =============================================================================
 # Verify Models
@@ -200,10 +186,9 @@ docker compose down
 
 print_status "Bootstrap Complete\!"
 
-echo "Models installed:"
-echo "  - $CODING_MODEL (coding tasks)"
-echo "  - $SUMMARY_MODEL (summarization)"
-echo "  - $GENERAL_MODEL (general chat)"
+echo "Models installed (2-model setup):"
+echo "  - $CODING_MODEL (coding + reasoning)"
+echo "  - $GENERAL_MODEL (general + summarization)"
 echo "  - $EMBEDDING_MODEL (FAISS memory)"
 echo ""
 echo "Data stored in: $SCRIPT_DIR/data/"
@@ -213,3 +198,36 @@ echo "  1. Start the stack:    ./ai-on.sh"
 echo "  2. Open browser:       http://localhost:3000"
 echo "  3. Create account and start chatting\!"
 echo ""
+
+# =============================================================================
+# Cleanup Old Models
+# =============================================================================
+# Remove models that are no longer needed to free up disk space
+
+print_status "Cleaning Up Old Models"
+
+# List of models to keep
+KEEP_MODELS="$CODING_MODEL $GENERAL_MODEL $EMBEDDING_MODEL"
+
+# Get all installed models
+INSTALLED=$(docker compose exec -T ollama ollama list 2>/dev/null | tail -n +2 | awk "{print \$1}")
+
+for model in $INSTALLED; do
+    # Check if model should be kept
+    keep=false
+    for keep_model in $KEEP_MODELS; do
+        if [[ "$model" == "$keep_model" ]]; then
+            keep=true
+            break
+        fi
+    done
+    
+    if [[ "$keep" == "false" ]]; then
+        print_info "Removing unused model: $model"
+        docker compose exec -T ollama ollama rm "$model" 2>/dev/null || true
+    else
+        print_info "Keeping model: $model"
+    fi
+done
+
+print_info "Cleanup complete"
