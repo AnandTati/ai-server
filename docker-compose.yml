@@ -32,9 +32,9 @@ services:
     networks: [ai-net]
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
-      - CODING_MODEL=deepseek:latest
-      - SUMMARY_MODEL=qwen:latest
-      - GENERAL_MODEL=llama3:latest
+      - CODING_MODEL=deepseek-coder:6.7b-instruct-q4_K_M
+      - SUMMARY_MODEL=qwen2.5:7b-instruct-q4_K_M
+      - GENERAL_MODEL=llama3.1:8b-instruct-q4_K_M
     ports:
       - "8000:8000"
 

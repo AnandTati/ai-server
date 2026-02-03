@@ -60,9 +60,9 @@ ai-stack/
 | Select | Routes To | Use For |
 |--------|-----------|---------|
 | `auto` | Auto-detect | Let router decide |
-| `deepseek` | deepseek:latest | Coding tasks |
-| `qwen` | qwen:latest | Summarization |
-| `llama3` | llama3:latest | General chat |
+| `deepseek` | deepseek-coder:6.7b-instruct-q4_K_M | Coding tasks |
+| `qwen` | qwen2.5:7b-instruct-q4_K_M | Summarization |
+| `llama3` | llama3.1:8b-instruct-q4_K_M | General chat |
 
 **Auto-Detection Keywords:**
 
