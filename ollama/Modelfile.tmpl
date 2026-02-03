@@ -1,0 +1,11 @@
+FROM {{ base }}
+
+PARAMETER temperature {{ temperature }}
+PARAMETER num_ctx 8192
+{% if top_p is defined and top_p is not none and top_p != "" %}
+PARAMETER top_p {{ top_p }}
+{% endif %}
+
+SYSTEM """
+{{ system }}
+"""

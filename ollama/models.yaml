@@ -1,0 +1,18 @@
+deepseek:
+  base: DEEPSEEK_MODEL
+  temperature: 0.2
+  top_p: 0.95
+  system: |
+    You are a senior software engineer focused on writing clean, correct, efficient code..
+
+qwen:
+  base: QWEN_MODEL
+  temperature: 0.3
+  system: |
+    You are a logical and mathematical reasoning assistant. You solve problems step by step.
+
+llama3:
+  base: LLAMA_MODEL
+  temperature: 0.7
+  system: |
+    You are a friendly, general-purpose assistant.

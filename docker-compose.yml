@@ -7,14 +7,15 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
-    networks:
-      - ai-net
+    networks: [ai-net]
     volumes:
       - ./data/ollama:/root/.ollama
+    env_file:
+      - ./ollama/models.env
     environment:
       - OLLAMA_KEEP_ALIVE=-1
-      - OLLAMA_MODELS=/root/.ollama/models
-    # Ensure Ollama uses the GPU to prevent slow-load timeouts
+    ports:
+      - "11434:11434"
     deploy:
       resources:
         reservations:
@@ -24,30 +25,25 @@ services:
               capabilities: [gpu]
 
   router:
-    build: ./router
+    build: ./smart-router
     container_name: ai-router
     restart: unless-stopped
-    depends_on:
-      - ollama
-    networks:
-      - ai-net
+    depends_on: [ollama]
+    networks: [ai-net]
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CODING_MODEL=deepseek:latest
+      - SUMMARY_MODEL=qwen:latest
+      - GENERAL_MODEL=llama3:latest
     ports:
       - "8000:8000"
-    expose:
-      - "8000"
-    volumes:
-      - ./data/faiss:/app/faiss
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: openwebui
     restart: unless-stopped
-    depends_on:
-      - router
-    networks:
-      - ai-net
+    depends_on: [router]
+    networks: [ai-net]
     ports:
       - "3000:8080"
     environment:
@@ -69,4 +65,3 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
