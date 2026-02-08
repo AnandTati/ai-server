@@ -1,6 +1,6 @@
 # AI Stack - Complete Setup Guide
 
-A self-hosted AI stack with intelligent query routing and conversation memory.
+A self-hosted AI stack with LLM-based intent detection, web search, and conversation memory.
 
 ---
 
@@ -10,22 +10,28 @@ A self-hosted AI stack with intelligent query routing and conversation memory.
 2. [Prerequisites](#prerequisites)
 3. [Installation](#installation)
 4. [Deployment](#deployment)
-5. [Testing](#testing)
-6. [Development](#development)
-7. [API Reference](#api-reference)
-8. [Troubleshooting](#troubleshooting)
+5. [Configuration](#configuration)
+6. [Testing](#testing)
+7. [Development](#development)
+8. [API Reference](#api-reference)
+9. [Troubleshooting](#troubleshooting)
+10. [Quick Reference](#quick-reference)
 
 ---
 
 ## Overview
 
 ### Features
-- **Ollama** - Local LLM backend (GPU accelerated)
-- **Smart Router** - Auto-routes queries to the best model + FAISS memory
-- **OpenWebUI** - Chat interface at http://localhost:3000
-- **Whisper** - Speech-to-text
 
-### Architecture
+- **Smart Router** - LLM-based intent detection routes queries to the best model
+- **Web Search** - Automatic web search via SearXNG for current information
+- **Conversation Memory** - FAISS-powered semantic memory across sessions
+- **Model Indicator** - Shows which model and intent handled each response
+- **OpenWebUI** - Chat interface at http://localhost:3000 (defaults to "auto")
+- **Whisper** - Speech-to-text transcription
+
+### Architecture Diagram
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         USER ACCESS                             │
@@ -44,10 +50,17 @@ A self-hosted AI stack with intelligent query routing and conversation memory.
 │          │   (:8000)     │                                      │
 │          └───────┬───────┘                                      │
 │                  │                                              │
+│     ┌────────────┼────────────┐                                 │
+│     ▼            ▼            ▼                                 │
+│ ┌───────┐  ┌──────────┐  ┌─────────┐                            │
+│ │SearXNG│  │  Intent  │  │  FAISS  │                            │
+│ │ :8080 │  │Detection │  │ Memory  │                            │
+│ └───────┘  └──────────┘  └─────────┘                            │
+│                  │                                              │
 │     ┌────────────┴────────────┐                                 │
 │     ▼                         ▼                                 │
 │ ┌─────────────┐       ┌─────────────┐                           │
-│ │deepseek-r1  │       │   qwen3     │                           │
+│ │qwen2.5-coder│       │  qwen2.5    │                           │
 │ │  (coding)   │       │  (general)  │                           │
 │ └──────┬──────┘       └──────┬──────┘                           │
 │        └───────────┬─────────┘                                  │
@@ -60,12 +73,61 @@ A self-hosted AI stack with intelligent query routing and conversation memory.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2-Model Setup (Optimized for 12GB VRAM)
+### Request Processing Flow
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                           REQUEST PROCESSING FLOW                         │
+└───────────────────────────────────────────────────────────────────────────┘
+
+  User Query                                                      Response
+      │                                                              ▲
+      ▼                                                              │
+┌───────────────────────────────────────────────────────────────────────────┐
+│                            SMART ROUTER                                   │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  1. LLM INTENT CLASSIFICATION                                             │
+│     ┌─────────────────────────────────────────────────────────────┐       │
+│     │  "What is the current Python version?" ──► SEARCH           │       │
+│     │  "Write a Python function to sort"     ──► CODING           │       │
+│     │  "Summarize this article"              ──► SUMMARIZE        │       │
+│     │  "What is the capital of France?"      ──► GENERAL          │       │
+│     └─────────────────────────────────────────────────────────────┘       │
+│                              │                                            │
+│                              ▼                                            │
+│  2. WEB SEARCH (if SEARCH intent)                                         │
+│     ┌─────────────────────────────────────────────────────────────┐       │
+│     │  Query ──► SearXNG ──► Top 3 Results ──► Inject as Context  │       │
+│     └─────────────────────────────────────────────────────────────┘       │
+│                              │                                            │
+│                              ▼                                            │
+│  3. RETRIEVE MEMORY (FAISS)                                               │
+│     ┌─────────────────────────────────────────────────────────────┐       │
+│     │  Query ──► Embedding ──► FAISS Search ──► Similar Messages  │       │
+│     └─────────────────────────────────────────────────────────────┘       │
+│                              │                                            │
+│                              ▼                                            │
+│  4. ROUTE TO MODEL                                                        │
+│     ┌─────────────────────────────────────────────────────────────┐       │
+│     │  CODING ────────► qwen2.5-coder:14b                         │       │
+│     │  SEARCH ────────► qwen2.5:14b (with web results)            │       │
+│     │  SUMMARIZE ─────► qwen2.5:14b                               │       │
+│     │  GENERAL ───────► qwen2.5:14b                               │       │
+│     └─────────────────────────────────────────────────────────────┘       │
+│                              │                                            │
+│                              ▼                                            │
+│  5. ADD MODEL INDICATOR + STORE IN MEMORY                                 │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+### Model Configuration (Optimized for 12GB VRAM)
 
 | Model | Purpose | VRAM |
 |-------|---------|------|
-| `deepseek-r1:14b` | Coding + Reasoning | ~9GB |
-| `qwen3:8b` | General Chat + Summarization | ~5GB |
+| `qwen2.5-coder:14b` | Coding + Technical | ~9GB |
+| `qwen2.5:14b` | General + Search + Summarization | ~9GB |
 | `nomic-embed-text` | Embeddings for FAISS memory | ~274MB |
 
 ---
@@ -73,19 +135,22 @@ A self-hosted AI stack with intelligent query routing and conversation memory.
 ## Prerequisites
 
 ### Hardware Requirements
+
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | GPU VRAM | 8GB | 12GB+ |
 | RAM | 16GB | 32GB |
 | Storage | 50GB | 100GB+ |
+| GPU | RTX 3060 | RTX 4070/5070+ |
 
 ### Software Requirements
+
 - Docker with NVIDIA GPU support
-- Docker Compose
-- Python 3.x
+- Docker Compose v2+
 - NVIDIA drivers + CUDA
 
 ### Verify GPU Setup
+
 ```bash
 # Check NVIDIA driver
 nvidia-smi
@@ -99,6 +164,7 @@ docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
 ## Installation
 
 ### 1. Clone the Repository
+
 ```bash
 cd ~
 git clone <repository-url> ai-stack
@@ -106,27 +172,36 @@ cd ai-stack
 ```
 
 ### 2. Make Scripts Executable
+
 ```bash
 chmod +x bootstrap.sh ai-on.sh ai-off.sh install-service.sh
-chmod +x tests/run_tests.sh
+chmod +x tests/test_suite.sh
 ```
 
 ### 3. Run Bootstrap (First-time Setup)
+
 ```bash
 ./bootstrap.sh
 ```
 
 **What bootstrap does:**
-1. Creates data directories (`data/ollama/`, `data/openwebui/`, `data/smart-router/`)
-2. Starts Ollama container temporarily
-3. Pulls required models:
-   - `deepseek-r1:14b` (coding + reasoning)
-   - `qwen3:8b` (general + summarization)
-   - `nomic-embed-text` (embeddings for FAISS)
-4. Cleans up any unused models
-5. Stops services
 
-**Note:** This downloads ~15GB of model data.
+1. Creates data directories:
+   - `data/ollama/` - Model weights
+   - `data/openwebui/` - Chat history
+   - `data/smart-router/` - FAISS memory
+   - `data/searxng/` - Search config
+
+2. Starts Ollama container temporarily
+
+3. Pulls required models:
+   - `qwen2.5-coder:14b` (coding) ~9GB
+   - `qwen2.5:14b` (general) ~9GB
+   - `nomic-embed-text` (embeddings) ~274MB
+
+4. Starts all services
+
+**Note:** This downloads ~20GB of model data. First run takes time.
 
 ---
 
@@ -134,44 +209,30 @@ chmod +x tests/run_tests.sh
 
 ### Option 1: Manual Start/Stop
 
-**Start the stack:**
 ```bash
+# Start the stack
 ./ai-on.sh
-```
 
-**Stop the stack:**
-```bash
+# Stop the stack
 ./ai-off.sh
 ```
 
-**Note:** `ai-off.sh` also shuts down the system. Edit it if you only want to stop containers.
-
 ### Option 2: Systemd Service (Recommended for Auto-Start)
 
-**Install the service:**
 ```bash
+# Install the service
 sudo ./install-service.sh
-```
 
-**Service commands:**
-```bash
-# Enable auto-start on boot
-sudo systemctl enable ai-stack
-
-# Start now
-sudo systemctl start ai-stack
-
-# Check status
-sudo systemctl status ai-stack
-
-# Stop
-sudo systemctl stop ai-stack
-
-# Disable auto-start
-sudo systemctl disable ai-stack
+# Service commands
+sudo systemctl enable ai-stack   # Enable auto-start on boot
+sudo systemctl start ai-stack    # Start now
+sudo systemctl stop ai-stack     # Stop
+sudo systemctl status ai-stack   # Check status
+sudo systemctl disable ai-stack  # Disable auto-start
 ```
 
 ### Option 3: Docker Compose Directly
+
 ```bash
 # Start
 docker compose up -d
@@ -188,58 +249,108 @@ docker compose logs -f ollama
 ```
 
 ### Access Points
+
 | Service | URL | Description |
 |---------|-----|-------------|
-| OpenWebUI | http://localhost:3000 | Web chat interface |
+| OpenWebUI | http://localhost:3000 | Web chat (default model: auto) |
 | Smart Router | http://localhost:8000 | API endpoint |
+| SearXNG | http://localhost:8080 | Web search interface |
 | Ollama | http://localhost:11434 | Direct LLM access |
 | Whisper | http://localhost:9000 | Speech-to-text (localhost only) |
+
+---
+
+## Configuration
+
+### Single Source of Truth: models.env
+
+All model settings are in `models.env`:
+
+```env
+# Models
+CODING_MODEL=qwen2.5-coder:14b
+GENERAL_MODEL=qwen2.5:14b
+EMBEDDING_MODEL=nomic-embed-text
+
+# Service URLs (internal Docker network)
+OLLAMA_BASE_URL=http://ollama:11434
+SEARXNG_URL=http://searxng:8080
+```
+
+### OpenWebUI Settings (docker-compose.yml)
+
+```yaml
+openwebui:
+  environment:
+    OPENAI_API_BASE_URL: http://router:8000/v1
+    OPENAI_API_KEY: local-ai
+    DEFAULT_MODELS: "auto"                    # Default to smart routing
+    ENABLE_RAG_WEB_SEARCH: "true"
+    RAG_WEB_SEARCH_ENGINE: "searxng"
+    SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>&format=json"
+```
+
+### Changing Models
+
+1. Edit `models.env`:
+   ```env
+   CODING_MODEL=your-new-coder-model
+   GENERAL_MODEL=your-new-general-model
+   ```
+
+2. Pull the new model:
+   ```bash
+   docker exec ollama ollama pull <model-name>
+   ```
+
+3. Rebuild and restart router:
+   ```bash
+   docker compose build router
+   docker compose up -d router
+   ```
+
+### Managing Ollama Models
+
+```bash
+# List installed models
+docker exec ollama ollama list
+
+# Pull a new model
+docker exec ollama ollama pull <model-name>
+
+# Delete unused model
+docker exec ollama ollama rm <model-name>
+
+# Show model info
+docker exec ollama ollama show <model-name>
+```
 
 ---
 
 ## Testing
 
 ### Run the Full Test Suite
+
 ```bash
-./tests/run_tests.sh
+./tests/test_suite.sh           # Run all 31 tests
+./tests/test_suite.sh --quick   # Skip LLM-dependent tests
+./tests/test_suite.sh --verbose # Show detailed output
 ```
 
-### Test Coverage (19 tests)
+### Test Categories (31 tests)
 
-**Basic Health & API:**
-- Health check endpoint
-- Model list endpoint
-- Memory stats endpoint
-
-**Routing Tests - Coding:**
-- Python query → deepseek-r1
-- Debug query → deepseek-r1
-- Function query → deepseek-r1
-
-**Routing Tests - General:**
-- Greeting → qwen3
-- Question → qwen3
-- Ideas query → qwen3
-
-**Routing Tests - Summarization:**
-- Summarize query → qwen3
-- TL;DR query → qwen3
-
-**Word Boundary Tests:**
-- "Jason" (name) should NOT trigger coding (json keyword)
-- "math class" should NOT trigger coding (class keyword)
-
-**Streaming Tests:**
-- Basic streaming response
-- Streaming with coding query
-
-**Response Tests:**
-- Required OpenAI fields present
-- Message content not empty
-
-**Error Handling:**
-- Empty messages returns 400/422
-- Invalid JSON returns error
+| # | Category | Tests | Description |
+|---|----------|-------|-------------|
+| 1 | Health & Infrastructure | 5 | Router, Ollama, SearXNG, OpenWebUI connectivity |
+| 2 | Smart Routing | 3 | Coding, general, summarization routing |
+| 3 | Conversation History | 1 | Context retention across messages |
+| 4 | Web Search | 2 | Manual search, chat search trigger |
+| 5 | URL Fetching | 2 | Valid/invalid URL handling |
+| 6 | Memory System | 2 | FAISS stats, memory search |
+| 7 | API Compatibility | 2 | OpenAI format compliance |
+| 8 | Error Handling | 3 | Empty messages, missing fields, invalid JSON |
+| 9 | LLM Intent Detection | 7 | CODING, SEARCH, GENERAL, SUMMARIZE intents |
+| 10 | Model Indicator Display | 4 | Footer in responses, correct model shown |
 
 ### Manual API Testing
 
@@ -250,32 +361,28 @@ curl http://localhost:8000/health
 # List models
 curl http://localhost:8000/v1/models
 
-# Chat (auto-routing)
+# Chat with auto-routing (triggers intent detection)
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "auto",
-    "messages": [{"role": "user", "content": "Write a python function"}],
-    "stream": false
+    "messages": [{"role": "user", "content": "What is the current Python version?"}]
   }'
 
-# Chat (specific model)
-curl -X POST http://localhost:8000/v1/chat/completions \
+# Classify intent only (no chat response)
+curl -X POST http://localhost:8000/v1/classify \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "qwen3:8b",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": false
-  }'
+  -d '{"query": "Write a Python function to sort a list"}'
 
-# Streaming chat
-curl -X POST http://localhost:8000/v1/chat/completions \
+# Manual web search
+curl -X POST http://localhost:8000/v1/search \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "auto",
-    "messages": [{"role": "user", "content": "Tell me a joke"}],
-    "stream": true
-  }'
+  -d '{"query": "latest AI news"}'
+
+# Fetch URL content
+curl -X POST http://localhost:8000/v1/fetch \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
 
 # Memory stats
 curl http://localhost:8000/v1/memory/stats
@@ -291,116 +398,91 @@ curl -X POST http://localhost:8000/v1/memory/search \
 ## Development
 
 ### Project Structure
+
 ```
 ai-stack/
-├── docker-compose.yml            # Main orchestration file
-├── bootstrap.sh                  # Initial setup script
-├── ai-on.sh                      # Start script
-├── ai-off.sh                     # Stop script
-├── install-service.sh            # Systemd service installer
-├── ai-stack.service.template     # Service template
-├── README.md
+├── docker-compose.yml          # Main orchestration
+├── models.env                  # Model config (single source of truth)
+├── bootstrap.sh                # Initial setup
+├── ai-on.sh / ai-off.sh        # Start/stop scripts
+├── install-service.sh          # Systemd installer
+├── ai-stack.service.template   # Service template
 │
-├── smart-router/                 # Intelligent routing service
+├── smart-router/               # Intelligent routing service
 │   ├── Dockerfile
-│   ├── main.py                   # Router logic with FAISS memory
-│   └── requirements.txt
+│   └── main.py                 # Router with LLM intent detection
 │
 ├── tests/
-│   └── run_tests.sh              # Test suite (19 tests)
+│   └── test_suite.sh           # Comprehensive tests (31 tests)
 │
-├── ollama/                       # Ollama configuration
-│   ├── models.env
-│   └── models.yaml
-│
-├── whisper/                      # Speech-to-text service
+├── whisper/
 │   └── Dockerfile
 │
-└── data/                         # Persistent data (gitignored)
-    ├── ollama/                   # Model weights (~20GB+)
-    ├── openwebui/                # Chat history & settings
-    └── smart-router/             # FAISS memory storage
-        ├── memory.faiss          # Vector embeddings
-        └── memory.db             # Message metadata (SQLite)
+└── data/                       # Persistent data (gitignored)
+    ├── ollama/                 # Model weights (~20GB+)
+    ├── openwebui/              # Chat history & settings
+    ├── smart-router/           # FAISS + SQLite
+    │   ├── memory.faiss        # Vector embeddings
+    │   └── memory.db           # Message metadata
+    └── searxng/                # Search config
+        └── settings.yml
 ```
 
 ### Making Code Changes
 
-1. **Edit the smart router:**
-   ```bash
-   vim smart-router/main.py
-   ```
-
-2. **Rebuild the container:**
-   ```bash
-   docker compose build router
-   ```
-
-3. **Restart with new code:**
-   ```bash
-   docker compose up -d router
-   ```
-
-4. **Run tests:**
-   ```bash
-   ./tests/run_tests.sh
-   ```
-
-### Smart Router Classification
-
-**Coding Keywords (routes to deepseek-r1:14b):**
-```
-code, function, program, script, debug, error, bug, python, javascript,
-java, rust, golang, c++, sql, html, css, api, algorithm, data structure,
-compile, syntax, variable, loop, array, list, dictionary, object, method,
-import, def, async, await, return, print(, console.log, git, docker,
-kubernetes, database, query, regex, json, xml, implement, refactor,
-optimize, write a, create a, build a, fix this, fix the, how to code,
-programming
-```
-
-**Summarization Keywords (routes to qwen3:8b):**
-```
-summarize, summary, summarization, condense, brief, tldr, key points,
-main points, overview, recap, synopsis, shorten, reduce, simplify this text,
-explain briefly, in short, bullet points, highlight, extract
-```
-
-**General (routes to qwen3:8b):**
-- Everything else
-
-### Changing Models
-
-1. Edit `docker-compose.yml`:
-   ```yaml
-   environment:
-     - CODING_MODEL=deepseek-r1:14b
-     - GENERAL_MODEL=qwen3:8b
-     - EMBEDDING_MODEL=nomic-embed-text
-   ```
-
-2. Pull the new model:
-   ```bash
-   docker exec ollama ollama pull <model-name>
-   ```
-
-3. Restart router:
-   ```bash
-   docker compose restart router
-   ```
-
-### Managing Models
-
 ```bash
-# List installed models
-docker exec ollama ollama list
+# Edit router code
+vim smart-router/main.py
 
-# Pull a new model
-docker exec ollama ollama pull <model-name>
+# Rebuild the container
+docker compose build router
 
-# Delete unused model
-docker exec ollama ollama rm <model-name>
+# Restart with new code
+docker compose up -d router
+
+# Run tests to verify
+./tests/test_suite.sh
 ```
+
+### LLM-Based Intent Classification
+
+The router uses the LLM itself to classify queries (not keyword matching):
+
+```python
+INTENT_CLASSIFICATION_PROMPT = """Classify this user query into exactly ONE category.
+Reply with ONLY the category name, nothing else.
+
+Categories:
+- SEARCH: Query needs current/real-time information from the web (news, current
+  versions, recent events, prices, weather, live data, anything that changes over time)
+- CODING: Query is about programming, code, debugging, software development,
+  technical implementation
+- SUMMARIZE: Query asks to summarize, condense, or extract key points from text
+- GENERAL: All other queries (facts, explanations, creative writing, general knowledge)
+
+Query: "{query}"
+Category:"""
+```
+
+### Intent Routing Table
+
+| Intent | Routes To | Web Search | Use Case |
+|--------|-----------|------------|----------|
+| CODING | qwen2.5-coder:14b | No | Code generation, debugging |
+| SEARCH | qwen2.5:14b | Yes | Current events, versions, news |
+| SUMMARIZE | qwen2.5:14b | No | Text condensation |
+| GENERAL | qwen2.5:14b | No | Facts, explanations |
+
+### Model Indicator
+
+When using "auto" model, responses include a footer:
+
+```
+---
+*🤖 Model: qwen2.5-coder:14b | Intent: coding*
+```
+
+This helps verify queries are being routed correctly.
 
 ---
 
@@ -411,18 +493,22 @@ docker exec ollama ollama rm <model-name>
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Health check |
-| GET | `/v1/models` | List available models |
+| GET | `/v1/models` | List models (auto, qwen2.5-coder, qwen2.5) |
 | POST | `/v1/chat/completions` | Chat (OpenAI compatible) |
+| POST | `/v1/classify` | Classify query intent |
+| POST | `/v1/search` | Web search via SearXNG |
+| POST | `/v1/fetch` | Fetch and parse URL content |
 | GET | `/v1/memory/stats` | Memory statistics |
 | POST | `/v1/memory/search` | Search conversation memory |
 
-### Chat Request
+### Chat Request Format
+
 ```json
 {
   "model": "auto",
   "messages": [
     {"role": "system", "content": "You are helpful."},
-    {"role": "user", "content": "Hello"}
+    {"role": "user", "content": "What is the current Python version?"}
   ],
   "stream": false,
   "user": "default"
@@ -430,16 +516,75 @@ docker exec ollama ollama rm <model-name>
 ```
 
 **Model options:**
-- `auto` - Let router decide based on query
-- `deepseek-r1:14b` - Force coding model
-- `qwen3:8b` - Force general model
 
-### Memory Search Request
+| Model | Description |
+|-------|-------------|
+| `auto` | LLM-based intent detection + smart routing (recommended) |
+| `qwen2.5-coder:14b` | Force coding model (bypasses intent detection) |
+| `qwen2.5:14b` | Force general model (bypasses intent detection) |
+
+### Chat Response Format
+
 ```json
 {
-  "query": "search term",
-  "user_id": "default",
-  "k": 5
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1234567890,
+  "model": "qwen2.5-coder:14b",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Response text...\n\n---\n*🤖 Model: qwen2.5-coder:14b | Intent: coding*"
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150
+  }
+}
+```
+
+### Classify Request/Response
+
+**Request:**
+```json
+{"query": "Write a Python function to sort a list"}
+```
+
+**Response:**
+```json
+{"intent": "CODING", "needs_search": false}
+```
+
+### Search Request/Response
+
+**Request:**
+```json
+{"query": "latest Python news", "num_results": 5}
+```
+
+**Response:**
+```json
+{
+  "query": "latest Python news",
+  "results": [
+    {"title": "...", "url": "...", "snippet": "..."},
+    ...
+  ]
+}
+```
+
+### Memory Stats Response
+
+```json
+{
+  "total_messages": 150,
+  "faiss_vectors": 300,
+  "unique_users": 1,
+  "embedding_cache_size": 50
 }
 ```
 
@@ -447,63 +592,135 @@ docker exec ollama ollama rm <model-name>
 
 ## Troubleshooting
 
-### Services Not Starting
+### Check Logs
+
+```bash
+# Router logs (shows intent detection and routing)
+docker logs ai-router -f
+
+# Filter for intent classification
+docker logs ai-router -f 2>&1 | grep Intent
+
+# All service logs
+docker compose logs -f
+
+# Specific service
+docker compose logs -f ollama
+docker compose logs -f searxng
+```
+
+### Common Issues
+
+#### Web search not triggering
+
+**Symptoms:** Getting outdated answers for current info questions
+
+**Solution:**
+1. Make sure "auto" model is selected in OpenWebUI (not a specific model)
+2. Check logs: `docker logs ai-router -f | grep Intent`
+3. Should see: `[Intent] LLM classified as SEARCH`
+4. Specific models bypass intent detection entirely
+
+#### Wrong model being used
+
+**Symptoms:** Coding questions not going to coder model
+
+**Solution:**
+1. Use "auto" model to enable smart routing
+2. Check the model indicator in the response footer
+3. Verify logs show correct intent classification
+
+#### GPU not detected
+
+```bash
+# Verify GPU is visible
+nvidia-smi
+
+# Test Docker GPU access
+docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
+
+# Check Ollama GPU usage
+docker logs ollama | grep -i gpu
+```
+
+#### Memory issues
+
+```bash
+# Check memory stats
+curl http://localhost:8000/v1/memory/stats
+
+# Reset memory completely
+rm data/smart-router/memory.*
+docker compose restart router
+```
+
+#### Services not starting
 
 ```bash
 # Check container status
 docker compose ps
 
-# Check specific logs
+# Check specific service logs
 docker compose logs ollama
 docker compose logs router
 docker compose logs openwebui
+docker compose logs searxng
 ```
 
-### GPU Issues
-
-```bash
-# Check GPU usage
-nvidia-smi
-
-# Verify Docker GPU access
-docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
-```
-
-### Router Not Connecting to Ollama
-
-```bash
-# Check if Ollama is running
-curl http://localhost:11434/api/tags
-
-# Check router logs
-docker compose logs -f router
-```
-
-### Out of VRAM
-
-```bash
-# Check current GPU memory
-nvidia-smi
-
-# Solutions:
-# 1. Use smaller models
-# 2. Reduce context length
-# 3. Stop other GPU applications
-```
-
-### Reset FAISS Memory
-
-```bash
-rm data/smart-router/memory.*
-docker compose restart router
-```
-
-### Restart Everything
+#### Restart everything
 
 ```bash
 docker compose down
 docker compose up -d
 ```
+
+#### Rebuild everything
+
+```bash
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+---
+
+## Quick Reference
+
+### Commands
+
+| Action | Command |
+|--------|---------|
+| Start | `./ai-on.sh` or `docker compose up -d` |
+| Stop | `docker compose down` |
+| Logs | `docker logs ai-router -f` |
+| Test | `./tests/test_suite.sh` |
+| Health | `curl http://localhost:8000/health` |
+| Memory Stats | `curl http://localhost:8000/v1/memory/stats` |
+| Rebuild Router | `docker compose build router && docker compose up -d router` |
+| Reset Memory | `rm data/smart-router/memory.* && docker compose restart router` |
+
+### URLs
+
+| Service | URL |
+|---------|-----|
+| Web Chat | http://localhost:3000 |
+| API | http://localhost:8000/v1 |
+| Web Search | http://localhost:8080 |
+| Ollama | http://localhost:11434 |
+
+### File Locations
+
+| File | Purpose |
+|------|---------|
+| `models.env` | Model configuration |
+| `docker-compose.yml` | Service orchestration |
+| `smart-router/main.py` | Router logic |
+| `tests/test_suite.sh` | Test suite |
+| `data/ollama/` | Model weights (~20GB+) |
+| `data/openwebui/` | Chat history, user accounts |
+| `data/smart-router/memory.faiss` | Vector embeddings |
+| `data/smart-router/memory.db` | Message metadata (SQLite) |
+| `data/searxng/settings.yml` | Search engine config |
 
 ### Backup & Restore
 
@@ -514,49 +731,3 @@ tar -czvf ai-stack-backup.tar.gz data/
 # Restore
 tar -xzvf ai-stack-backup.tar.gz
 ```
-
----
-
-## Quick Reference
-
-### Start Stack
-```bash
-./ai-on.sh
-# or
-docker compose up -d
-```
-
-### Stop Stack
-```bash
-docker compose down
-```
-
-### View Logs
-```bash
-docker compose logs -f
-docker compose logs -f router
-```
-
-### Run Tests
-```bash
-./tests/run_tests.sh
-```
-
-### Check Health
-```bash
-curl http://localhost:8000/health
-```
-
-### Access Web UI
-Open http://localhost:3000 in browser
-
----
-
-## File Locations
-
-| File | Purpose |
-|------|---------|
-| `data/ollama/` | Model weights (~20GB+) |
-| `data/openwebui/` | User accounts, chat history |
-| `data/smart-router/memory.faiss` | Vector embeddings |
-| `data/smart-router/memory.db` | Message metadata (SQLite) |
