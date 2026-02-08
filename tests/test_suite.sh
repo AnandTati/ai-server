@@ -12,6 +12,8 @@
 #   6. Memory System
 #   7. API Compatibility
 #   8. Error Handling
+#   9. LLM Intent Detection
+#  10. Model Indicator Display
 #
 # Usage:
 #   ./tests/test_suite.sh           # Run all tests
@@ -135,7 +137,7 @@ test_smart_routing() {
 TESTEOF
 
     local response
-    response=$(curl -sf "$ROUTER_URL/v1/chat/completions" \
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d @/tmp/test_coding.json)
 
@@ -143,6 +145,7 @@ TESTEOF
         log_pass "Coding query routed correctly"
     else
         log_fail "Coding query routing failed"
+        if $VERBOSE; then echo "  Response: $response"; fi
     fi
 
     # 2.2 General query
@@ -151,7 +154,7 @@ TESTEOF
 {"model":"auto","messages":[{"role":"user","content":"What is the capital of Japan?"}]}
 TESTEOF
 
-    response=$(curl -sf "$ROUTER_URL/v1/chat/completions" \
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d @/tmp/test_general.json)
 
@@ -159,6 +162,7 @@ TESTEOF
         log_pass "General query answered correctly"
     else
         log_fail "General query failed"
+        if $VERBOSE; then echo "  Response: $response"; fi
     fi
 
     # 2.3 Summarization query
@@ -167,7 +171,7 @@ TESTEOF
 {"model":"auto","messages":[{"role":"user","content":"Summarize: AI is transforming technology."}]}
 TESTEOF
 
-    response=$(curl -sf "$ROUTER_URL/v1/chat/completions" \
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d @/tmp/test_summary.json)
 
@@ -175,6 +179,7 @@ TESTEOF
         log_pass "Summarization query handled"
     else
         log_fail "Summarization query failed"
+        if $VERBOSE; then echo "  Response: $response"; fi
     fi
 
     rm -f /tmp/test_coding.json /tmp/test_general.json /tmp/test_summary.json
@@ -207,7 +212,7 @@ test_conversation_history() {
 TESTEOF
 
     local response
-    response=$(curl -sf "$ROUTER_URL/v1/chat/completions" \
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d @/tmp/test_conv.json)
 
@@ -231,7 +236,7 @@ test_web_search() {
     # 4.1 Manual search endpoint
     log_info "Testing manual search endpoint..."
     local response
-    response=$(curl -sf "$ROUTER_URL/v1/search" \
+    response=$(curl -sf --max-time 30 "$ROUTER_URL/v1/search" \
         -H "Content-Type: application/json" \
         -d '{"query":"python programming"}')
 
@@ -252,7 +257,7 @@ test_web_search() {
 {"model":"auto","messages":[{"role":"user","content":"Search the web for latest Python news"}]}
 TESTEOF
 
-    response=$(curl -sf "$ROUTER_URL/v1/chat/completions" \
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d @/tmp/test_search.json)
 
@@ -359,7 +364,7 @@ test_api_compatibility() {
 {"model":"auto","messages":[{"role":"user","content":"Hi"}]}
 TESTEOF
 
-    response=$(curl -sf "$ROUTER_URL/v1/chat/completions" \
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d @/tmp/test_format.json)
 
@@ -367,6 +372,7 @@ TESTEOF
         log_pass "Chat response is OpenAI-compatible"
     else
         log_fail "Chat response not OpenAI-compatible"
+        if $VERBOSE; then echo "  Response: $response"; fi
     fi
 
     rm -f /tmp/test_format.json
@@ -418,6 +424,192 @@ test_error_handling() {
 }
 
 # =============================================================================
+# Test 9: LLM Intent Detection
+# =============================================================================
+
+test_llm_intent_detection() {
+    log_section "9. LLM INTENT DETECTION TESTS"
+
+    # 9.1 Classify endpoint exists
+    log_info "Testing classify endpoint availability..."
+    local response
+    response=$(curl -sf --max-time 60 "$ROUTER_URL/v1/classify" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"hello"}')
+
+    if echo "$response" | grep -q "intent"; then
+        log_pass "Classify endpoint is available"
+    else
+        log_fail "Classify endpoint not available"
+    fi
+
+    if $QUICK_MODE; then
+        log_skip "LLM intent classification tests (quick mode)"
+        return
+    fi
+
+    # 9.2 CODING intent detection
+    log_info "Testing CODING intent detection..."
+    response=$(curl -sf --max-time 60 "$ROUTER_URL/v1/classify" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"Write a Python function to sort a list"}')
+
+    if echo "$response" | grep -qi "CODING"; then
+        log_pass "CODING intent detected for programming query"
+    else
+        log_fail "CODING intent not detected"
+        if $VERBOSE; then echo "  Response: $response"; fi
+    fi
+
+    # 9.3 SEARCH intent for current information (the bug we fixed)
+    log_info "Testing SEARCH intent for current info query..."
+    response=$(curl -sf --max-time 60 "$ROUTER_URL/v1/classify" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"what is the current python version?"}')
+
+    if echo "$response" | grep -qi "SEARCH"; then
+        log_pass "SEARCH intent detected for current info query"
+    else
+        log_fail "SEARCH intent not detected for current info query"
+        if $VERBOSE; then echo "  Response: $response"; fi
+    fi
+
+    # 9.4 SEARCH intent for news/recent events
+    log_info "Testing SEARCH intent for news query..."
+    response=$(curl -sf --max-time 60 "$ROUTER_URL/v1/classify" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"What are the latest news about AI?"}')
+
+    if echo "$response" | grep -qi "SEARCH"; then
+        log_pass "SEARCH intent detected for news query"
+    else
+        log_fail "SEARCH intent not detected for news query"
+        if $VERBOSE; then echo "  Response: $response"; fi
+    fi
+
+    # 9.5 GENERAL intent for factual query
+    log_info "Testing GENERAL intent for factual query..."
+    response=$(curl -sf --max-time 60 "$ROUTER_URL/v1/classify" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"What is the capital of France?"}')
+
+    if echo "$response" | grep -qi "GENERAL"; then
+        log_pass "GENERAL intent detected for factual query"
+    else
+        log_fail "GENERAL intent not detected for factual query"
+        if $VERBOSE; then echo "  Response: $response"; fi
+    fi
+
+    # 9.6 SUMMARIZE intent detection
+    log_info "Testing SUMMARIZE intent detection..."
+    response=$(curl -sf --max-time 60 "$ROUTER_URL/v1/classify" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"Summarize this article about climate change"}')
+
+    if echo "$response" | grep -qi "SUMMARIZE"; then
+        log_pass "SUMMARIZE intent detected"
+    else
+        log_fail "SUMMARIZE intent not detected"
+        if $VERBOSE; then echo "  Response: $response"; fi
+    fi
+
+    # 9.7 Web search integration with new intent detection
+    log_info "Testing web search triggers on SEARCH intent..."
+    cat > /tmp/test_current.json << 'TESTEOF'
+{"model":"auto","messages":[{"role":"user","content":"What is the current version of Node.js?"}]}
+TESTEOF
+
+    response=$(curl -sf --max-time 180 "$ROUTER_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d @/tmp/test_current.json)
+
+    # Check that we get a response (web search should be triggered)
+    if [ -n "$response" ] && echo "$response" | grep -q "choices"; then
+        log_pass "Chat with current info query returns response"
+    else
+        log_fail "Chat with current info query failed"
+        if $VERBOSE; then echo "  Response: $response"; fi
+    fi
+
+    rm -f /tmp/test_current.json
+}
+
+# =============================================================================
+# Test 10: Model Indicator Display
+# =============================================================================
+
+test_model_indicator() {
+    log_section "10. MODEL INDICATOR DISPLAY TESTS"
+
+    if $QUICK_MODE; then
+        log_skip "Model indicator tests (quick mode)"
+        return
+    fi
+
+    # 10.1 Model indicator appears in general query response
+    log_info "Testing model indicator in general query..."
+    local response
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"auto","messages":[{"role":"user","content":"What is 2+2?"}]}')
+
+    local content
+    content=$(echo "$response" | jq -r '.choices[0].message.content')
+
+    if echo "$content" | grep -q "Model:.*Intent: general"; then
+        log_pass "Model indicator appears in general query"
+    else
+        log_fail "Model indicator missing in general query"
+        if $VERBOSE; then echo "  Content: $content"; fi
+    fi
+
+    # 10.2 Correct model shown for coding query
+    log_info "Testing correct model for coding query..."
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"auto","messages":[{"role":"user","content":"Write a Python hello world"}]}')
+
+    content=$(echo "$response" | jq -r '.choices[0].message.content')
+
+    if echo "$content" | grep -q "qwen2.5-coder" && echo "$content" | grep -q "Intent: coding"; then
+        log_pass "Coding query shows coder model"
+    else
+        log_fail "Coding query does not show coder model"
+        if $VERBOSE; then echo "  Content: $content"; fi
+    fi
+
+    # 10.3 Correct model shown for search query
+    log_info "Testing correct model for search query..."
+    response=$(curl -sf --max-time 180 "$ROUTER_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"auto","messages":[{"role":"user","content":"What are the latest tech news?"}]}')
+
+    content=$(echo "$response" | jq -r '.choices[0].message.content')
+
+    if echo "$content" | grep -q "Intent: search"; then
+        log_pass "Search query shows search intent"
+    else
+        log_fail "Search query does not show search intent"
+        if $VERBOSE; then echo "  Content: $content"; fi
+    fi
+
+    # 10.4 No indicator when not using auto model
+    log_info "Testing no indicator when using specific model..."
+    response=$(curl -sf --max-time 120 "$ROUTER_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"qwen2.5:14b","messages":[{"role":"user","content":"Hello"}]}')
+
+    content=$(echo "$response" | jq -r '.choices[0].message.content')
+
+    if echo "$content" | grep -q "Model:.*Intent:"; then
+        log_fail "Model indicator appears when not using auto"
+        if $VERBOSE; then echo "  Content: $content"; fi
+    else
+        log_pass "No indicator when using specific model"
+    fi
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -439,6 +631,8 @@ main() {
     test_memory_system
     test_api_compatibility
     test_error_handling
+    test_llm_intent_detection
+    test_model_indicator
 
     # Summary
     log_section "TEST SUMMARY"

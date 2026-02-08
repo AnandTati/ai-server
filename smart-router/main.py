@@ -2,24 +2,20 @@
 Smart Router for AI Stack
 ==========================
 A FastAPI service that intelligently routes queries to appropriate Ollama models
-based on query classification.
-
-2-Model Setup (optimized for 12GB VRAM):
-- CODING_MODEL: deepseek-r1:14b for coding + reasoning
-- GENERAL_MODEL: qwen3:8b for general chat + summarization
+using LLM-based intent detection.
 
 Features:
-- Keyword-based query classification
+- LLM-based intent classification (no keyword matching)
 - FAISS-powered conversation memory for context retrieval
 - SQLite metadata storage for message persistence
 - Cross-session memory support
 - AUTO URL FETCHING: Detects URLs and fetches content
-- AUTO WEB SEARCH: Detects search queries and uses SearXNG
+- AUTO WEB SEARCH: LLM determines when web search is needed
 
 Environment Variables:
 - OLLAMA_BASE_URL: Ollama API endpoint (default: http://ollama:11434)
-- CODING_MODEL: Model for coding queries (default: deepseek-r1:14b)
-- GENERAL_MODEL: Model for general + summarization (default: qwen3:8b)
+- CODING_MODEL: Model for coding queries
+- GENERAL_MODEL: Model for general + summarization
 - EMBEDDING_MODEL: Model for generating embeddings (default: nomic-embed-text)
 - DATA_DIR: Directory for persistent storage (default: /data)
 - SEARXNG_URL: SearXNG search endpoint (default: http://searxng:8080)
@@ -42,12 +38,6 @@ import faiss
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
-
-def word_match(keyword: str, text: str) -> bool:
-    """Check if keyword exists as a whole word in text."""
-    pattern = r"\b" + re.escape(keyword.strip()) + r"\b"
-    return bool(re.search(pattern, text, re.IGNORECASE))
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -68,55 +58,79 @@ SIMILARITY_THRESHOLD = 0.7
 EMBEDDING_DIM = 768  # nomic-embed-text dimension
 
 # Web fetch configuration
-MAX_URL_CONTENT_LENGTH = 8000  # Max characters to include from fetched URL
-MAX_SEARCH_RESULTS = 3  # Number of search results to include
+MAX_URL_CONTENT_LENGTH = 8000
+MAX_SEARCH_RESULTS = 3
 
 # =============================================================================
-# Classification Keywords
+# LLM-Based Intent Classification
 # =============================================================================
 
-CODING_KEYWORDS = [
-    "code", "function", "program", "script", "debug", "error", "bug",
-    "python", "javascript", "java", "rust", "golang", "c++", "sql", "html", "css",
-    "api", "algorithm", "data structure", "compile", "syntax", "variable",
-    "loop", "array", "list", "dictionary", "object", "method", "import",
-    "def ", "async", "await", "return", "print(", "console.log", "git",
-    "docker", "kubernetes", "database", "query", "regex", "json", "xml",
-    "implement", "refactor", "optimize", "write a", "create a", "build a",
-    "fix this", "fix the", "how to code", "programming"
-]
+INTENT_CLASSIFICATION_PROMPT = """Classify this user query into exactly ONE category. Reply with ONLY the category name, nothing else.
 
-SUMMARY_KEYWORDS = [
-    "summarize", "summary", "summarization", "condense", "brief", "tldr",
-    "key points", "main points", "overview", "recap", "synopsis",
-    "shorten", "reduce", "simplify this text", "explain briefly",
-    "in short", "bullet points", "highlight", "extract"
-]
+Categories:
+- SEARCH: Query needs current/real-time information from the web (news, current versions, recent events, prices, weather, live data, anything that changes over time)
+- CODING: Query is about programming, code, debugging, software development, technical implementation
+- SUMMARIZE: Query asks to summarize, condense, or extract key points from text
+- GENERAL: All other queries (facts, explanations, creative writing, general knowledge)
 
-# Keywords that trigger web search
-SEARCH_KEYWORDS = [
-    # Explicit search requests
-    "search for", "search the web", "look up", "find out", "google",
-    "search online", "find online", "check online", "look online",
-    "search internet", "on the internet", "from the web",
-    # Current events / time-sensitive
-    "what is the latest", "what are the latest", "latest news",
-    "current news", "recent news", "latest update", "breaking news",
-    "today", "yesterday", "this week", "2024", "2025", "2026",
-    "who won", "what happened",
-    # Information requests (common patterns)
-    "news about", "tell me about", "information about", "info on",
-    "what do you know about", "can you find", "find me",
-    # Capability/feature queries
-    "latest version", "new features", "recent updates",
-    "what can", "capabilities of", "features of"
-]
+Query: "{query}"
+
+Category:"""
+
+async def classify_intent_with_llm(query: str) -> Dict[str, Any]:
+    """
+    Use LLM to classify the intent of a query.
+    Returns dict with 'intent' and 'needs_search' keys.
+    """
+    try:
+        prompt = INTENT_CLASSIFICATION_PROMPT.format(query=query[:500])  # Limit query length
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": GENERAL_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0,  # Deterministic
+                        "num_predict": 20,  # Short response
+                    }
+                }
+            )
+
+            if response.status_code != 200:
+                logger.error(f"[Intent] LLM classification failed: {response.status_code}")
+                return {"intent": "general", "needs_search": False}
+
+            result = response.json()
+            raw_response = result.get("response", "").strip().upper()
+
+            # Parse the response
+            if "SEARCH" in raw_response:
+                intent = "search"
+                needs_search = True
+            elif "CODING" in raw_response:
+                intent = "coding"
+                needs_search = False
+            elif "SUMMAR" in raw_response:  # Catches SUMMARIZE, SUMMARY
+                intent = "summarize"
+                needs_search = False
+            else:
+                intent = "general"
+                needs_search = False
+
+            logger.info(f"[Intent] LLM classified as {intent.upper()} (raw: {raw_response[:50]})")
+            return {"intent": intent, "needs_search": needs_search}
+
+    except Exception as e:
+        logger.error(f"[Intent] Classification error: {e}")
+        return {"intent": "general", "needs_search": False}
 
 # =============================================================================
 # URL and Web Search Utilities
 # =============================================================================
 
-# Regex to find URLs in text
 URL_PATTERN = re.compile(
     r'https?://[^\s<>"{}|\\^`\[\]]+',
     re.IGNORECASE
@@ -127,35 +141,15 @@ def extract_urls(text: str) -> List[str]:
     urls = URL_PATTERN.findall(text)
     cleaned = []
     for url in urls:
-        # Remove trailing punctuation that's likely not part of the URL
         url = url.rstrip('.,;:!?)\'\"')
-        # Also handle markdown link syntax [text](url)
         if url.endswith(')') and '(' not in url:
             url = url.rstrip(')')
         if url:
             cleaned.append(url)
     return cleaned
 
-def needs_web_search(text: str) -> bool:
-    """Check if the query needs web search."""
-    text_lower = text.lower()
-
-    # Check explicit search keywords
-    for keyword in SEARCH_KEYWORDS:
-        if keyword in text_lower:
-            logger.info(f"[Web] Search triggered by keyword: {keyword}")
-            return True
-
-    # Check for standalone "latest" with a topic
-    if "latest" in text_lower and len(text_lower.split()) > 2:
-        logger.info("[Web] Search triggered by 'latest' keyword")
-        return True
-
-    return False
-
 def extract_search_query(text: str) -> str:
     """Extract the search query from user message."""
-    # Remove common prefixes
     text_lower = text.lower()
     prefixes = [
         "search for", "search the web for", "look up", "find out about",
@@ -170,7 +164,6 @@ def extract_search_query(text: str) -> str:
             result = text[len(prefix):].strip()
             break
 
-    # Clean up
     result = result.strip("?.,!")
     return result if result else text
 
@@ -190,16 +183,11 @@ async def fetch_url_content(url: str) -> Optional[str]:
             content_type = response.headers.get("content-type", "")
 
             if "text/html" in content_type:
-                # Simple HTML text extraction
                 html = response.text
-                # Remove script and style tags
                 html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
                 html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
-                # Remove HTML tags
                 text = re.sub(r'<[^>]+>', ' ', html)
-                # Clean up whitespace
                 text = re.sub(r'\s+', ' ', text).strip()
-                # Truncate
                 if len(text) > MAX_URL_CONTENT_LENGTH:
                     text = text[:MAX_URL_CONTENT_LENGTH] + "..."
                 logger.info(f"[Web] Fetched {len(text)} chars from {url}")
@@ -253,20 +241,20 @@ async def search_web(query: str) -> List[Dict[str, str]]:
         logger.error(f"[Web] Search failed: {e}")
         return []
 
-async def enhance_with_web_content(messages: List[Dict], user_message: str) -> List[Dict]:
+async def enhance_with_web_content(messages: List[Dict], user_message: str, needs_search: bool) -> List[Dict]:
     """Enhance messages with web content (URLs or search results)."""
     web_context = []
 
-    # Check for URLs in the message
+    # Check for URLs in the message (always fetch URLs if present)
     urls = extract_urls(user_message)
     if urls:
-        for url in urls[:3]:  # Limit to 3 URLs
+        for url in urls[:3]:
             content = await fetch_url_content(url)
             if content:
                 web_context.append(f"[Content from {url}]:\n{content}")
 
-    # Check if web search is needed
-    elif needs_web_search(user_message):
+    # If LLM determined search is needed
+    elif needs_search:
         search_query = extract_search_query(user_message)
         results = await search_web(search_query)
         if results:
@@ -275,17 +263,15 @@ async def enhance_with_web_content(messages: List[Dict], user_message: str) -> L
                 search_text += f"{i}. {r['title']}\n   URL: {r['url']}\n   {r['content']}\n\n"
             web_context.append(search_text)
 
-    # If we have web context, inject it into messages
+    # Inject web context into messages
     if web_context:
-        # Find the last user message and prepend web context to it
-        messages = [msg.copy() for msg in messages]  # Deep copy
+        messages = [msg.copy() for msg in messages]
 
         for i in range(len(messages) - 1, -1, -1):
             if messages[i].get("role") == "user":
                 original_content = messages[i].get("content", "")
                 web_info = "\n\n".join(web_context)
 
-                # Prepend web results directly to user message
                 messages[i]["content"] = f"""I found this current information from the web that you should use to answer my question:
 
 ---WEB SEARCH RESULTS (USE THIS INFO)---
@@ -304,9 +290,7 @@ Now, using the above web information, please answer: {original_content}"""
 # =============================================================================
 
 class ConversationMemory:
-    """
-    FAISS-powered conversation memory with SQLite metadata storage.
-    """
+    """FAISS-powered conversation memory with SQLite metadata storage."""
 
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
@@ -490,48 +474,13 @@ class ConversationMemory:
         }
 
 # =============================================================================
-# Query Classification
+# Model Selection
 # =============================================================================
 
-def classify_query(messages: list) -> str:
-    """Classify query based on keywords."""
-    text = ""
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text = part.get("text", "").lower()
-                        break
-            else:
-                text = content.lower()
-            break
-
-    if not text:
-        return "general"
-
-    # Check for summarization keywords first (more specific)
-    for keyword in SUMMARY_KEYWORDS:
-        if word_match(keyword, text):
-            logger.info(f"Classified as SUMMARIZATION (keyword: {keyword})")
-            return "summarization"
-
-    # Check for coding keywords
-    for keyword in CODING_KEYWORDS:
-        if word_match(keyword, text):
-            logger.info(f"Classified as CODING (keyword: {keyword})")
-            return "coding"
-
-    logger.info("Classified as GENERAL (no specific keywords)")
-    return "general"
-
-def get_model_for_classification(classification: str) -> str:
-    """Map classification to model."""
-    if classification == "coding":
+def get_model_for_intent(intent: str) -> str:
+    """Map intent to model."""
+    if intent == "coding":
         return CODING_MODEL
-    elif classification == "summarization":
-        return GENERAL_MODEL
     return GENERAL_MODEL
 
 # =============================================================================
@@ -545,12 +494,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global memory
 
-    logger.info(f"[Router] Starting Smart Router...")
+    logger.info(f"[Router] Starting Smart Router v4.0 (LLM-based intent detection)...")
     logger.info(f"[Router] Ollama URL: {OLLAMA_BASE_URL}")
     logger.info(f"[Router] SearXNG URL: {SEARXNG_URL}")
     logger.info(f"[Router] Models - Coding: {CODING_MODEL}, General: {GENERAL_MODEL}")
     logger.info(f"[Router] Data Directory: {DATA_DIR}")
-    logger.info(f"[Router] Web features: URL fetching + Auto search enabled")
 
     memory = ConversationMemory(DATA_DIR)
 
@@ -562,8 +510,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Smart Router",
-    description="Intelligent query router with conversation memory and web access",
-    version="3.0.0",
+    description="Intelligent query router with LLM-based intent detection",
+    version="4.0.0",
     lifespan=lifespan
 )
 
@@ -572,8 +520,8 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "version": "3.0.0",
-        "features": ["routing", "memory", "url_fetch", "web_search"],
+        "version": "4.0.0",
+        "features": ["llm_intent_detection", "memory", "url_fetch", "web_search"],
         "memory_stats": memory.get_stats() if memory else None
     }
 
@@ -591,13 +539,12 @@ async def list_models():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    """OpenAI-compatible chat completions with intelligent routing, memory, and web access."""
+    """OpenAI-compatible chat completions with LLM-based intent detection."""
     global memory
 
     body = await request.json()
     messages = body.get("messages", [])
 
-    # Validate messages
     if not messages:
         raise HTTPException(status_code=400, detail="messages cannot be empty")
 
@@ -614,18 +561,21 @@ async def chat_completions(request: Request):
                 last_user_msg = content
             break
 
-    # Enhance messages with web content (URL fetching or search)
+    # Classify intent using LLM
+    intent_result = {"intent": "general", "needs_search": False}
+    if last_user_msg and requested_model == "auto":
+        intent_result = await classify_intent_with_llm(last_user_msg)
+
+    # Enhance messages with web content if needed
     if last_user_msg:
-        messages = await enhance_with_web_content(messages, last_user_msg)
+        messages = await enhance_with_web_content(messages, last_user_msg, intent_result["needs_search"])
 
     # Determine target model
     if requested_model == "auto":
-        classification = classify_query(messages)
-        target_model = get_model_for_classification(classification)
-        logger.info(f"[Router] Auto-routing: {classification} -> {target_model}")
+        target_model = get_model_for_intent(intent_result["intent"])
+        logger.info(f"[Router] Auto-routing: {intent_result['intent'].upper()} -> {target_model}")
     else:
         target_model = requested_model
-        classification = "manual"
         logger.info(f"[Router] Manual selection: {target_model}")
 
     # Retrieve context from memory
@@ -656,7 +606,7 @@ async def chat_completions(request: Request):
             content=last_user_msg,
             role="user",
             user_id=user_id,
-            query_type=classification
+            query_type=intent_result["intent"]
         )
 
     # Forward to Ollama
@@ -686,13 +636,24 @@ async def chat_completions(request: Request):
                             pass
                         yield chunk
 
+            # Add model indicator at the end when auto-routing was used
+            if requested_model == "auto":
+                model_footer = f"\n\n---\n*🤖 Model: {target_model} | Intent: {intent_result['intent']}*"
+                footer_chunk = {
+                    "id": "model-info",
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"content": model_footer}, "finish_reason": None}]
+                }
+                yield f"data: {json.dumps(footer_chunk)}\n\n".encode()
+                full_response += model_footer
+
             if memory and full_response:
                 await memory.store_message(
                     content=full_response,
                     role="assistant",
                     user_id=user_id,
                     model_used=target_model,
-                    query_type=classification
+                    query_type=intent_result["intent"]
                 )
 
         return StreamingResponse(stream_response(), media_type="text/event-stream")
@@ -706,6 +667,14 @@ async def chat_completions(request: Request):
 
             result = response.json()
 
+            # Add model indicator when auto-routing was used
+            if requested_model == "auto" and "choices" in result:
+                assistant_content = result["choices"][0].get("message", {}).get("content", "")
+                if assistant_content:
+                    # Add model info footer
+                    model_footer = f"\n\n---\n*🤖 Model: {target_model} | Intent: {intent_result['intent']}*"
+                    result["choices"][0]["message"]["content"] = assistant_content + model_footer
+
             if memory and "choices" in result:
                 assistant_content = result["choices"][0].get("message", {}).get("content", "")
                 if assistant_content:
@@ -714,7 +683,7 @@ async def chat_completions(request: Request):
                         role="assistant",
                         user_id=user_id,
                         model_used=target_model,
-                        query_type=classification
+                        query_type=intent_result["intent"]
                     )
 
             return JSONResponse(content=result)
@@ -740,7 +709,6 @@ async def memory_search(request: Request):
     results = await memory.retrieve_context(query, user_id, k)
     return {"results": results}
 
-# New endpoint to manually fetch a URL
 @app.post("/v1/fetch")
 async def fetch_url(request: Request):
     """Manually fetch content from a URL."""
@@ -756,7 +724,6 @@ async def fetch_url(request: Request):
     else:
         raise HTTPException(status_code=502, detail="Failed to fetch URL")
 
-# New endpoint to manually search
 @app.post("/v1/search")
 async def search(request: Request):
     """Manually search the web."""
@@ -768,6 +735,19 @@ async def search(request: Request):
 
     results = await search_web(query)
     return {"query": query, "results": results}
+
+# New endpoint to test intent classification
+@app.post("/v1/classify")
+async def classify_intent(request: Request):
+    """Test endpoint to classify a query's intent."""
+    body = await request.json()
+    query = body.get("query", "")
+
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    result = await classify_intent_with_llm(query)
+    return {"query": query, "classification": result}
 
 if __name__ == "__main__":
     import uvicorn

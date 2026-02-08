@@ -132,6 +132,8 @@ services:
       # Connect to Smart Router
       OPENAI_API_BASE_URL: http://router:8000/v1
       OPENAI_API_KEY: local-ai
+      # Set default model to "auto" for smart routing
+      DEFAULT_MODELS: "auto"
       # Enable Web Search with SearXNG
       ENABLE_RAG_WEB_SEARCH: "true"
       RAG_WEB_SEARCH_ENGINE: "searxng"
