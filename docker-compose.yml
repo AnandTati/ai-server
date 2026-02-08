@@ -7,6 +7,7 @@
 #   2. Smart Router: Intelligent query routing with FAISS memory
 #   3. OpenWebUI: Web interface for interacting with AI models
 #   4. Whisper: Speech-to-text transcription
+#   5. SearXNG: Self-hosted web search engine
 #
 # Models (2-model setup for 12GB VRAM):
 #   - deepseek-r1:14b    - Coding + reasoning (~9GB)
@@ -16,6 +17,7 @@
 #   - data/ollama/       Model weights (~20GB+)
 #   - data/openwebui/    User accounts, chat history
 #   - data/smart-router/ FAISS index, SQLite database
+#   - data/searxng/      Search engine config
 #
 # Usage:
 #   Start:  docker compose up -d
@@ -31,9 +33,6 @@ networks:
 services:
   # ---------------------------------------------------------------------------
   # Ollama - Local LLM Inference Engine
-  # ---------------------------------------------------------------------------
-  # Runs large language models locally with GPU acceleration.
-  # OLLAMA_KEEP_ALIVE=-1 keeps models loaded indefinitely.
   # ---------------------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
@@ -59,14 +58,6 @@ services:
   # ---------------------------------------------------------------------------
   # Smart Router - Intelligent Query Routing with Memory
   # ---------------------------------------------------------------------------
-  # Routes queries to the appropriate model based on content analysis.
-  # 2-model setup: coding -> deepseek-r1, general/summary -> qwen3
-  #
-  # Features:
-  #   - Keyword-based query classification
-  #   - FAISS-powered semantic search for context retrieval
-  #   - Cross-session conversation memory
-  # ---------------------------------------------------------------------------
   router:
     build: ./smart-router
     container_name: ai-router
@@ -74,41 +65,63 @@ services:
     depends_on: [ollama]
     networks: [ai-net]
     environment:
-      # Ollama connection
       - OLLAMA_BASE_URL=http://ollama:11434
-      # 2-model setup (optimized for 12GB VRAM)
-      # DeepSeek-R1 14B: Advanced reasoning + coding
       - CODING_MODEL=deepseek-r1:14b
-      # Qwen3 8B: General chat and summarization
-      - GENERAL_MODEL=qwen3:8b
-      # Embedding model for FAISS memory
+      - GENERAL_MODEL=gemma2:9b
       - EMBEDDING_MODEL=nomic-embed-text
-      # Data directory (inside container, mounted below)
       - DATA_DIR=/data
     ports:
       - "8000:8000"
     volumes:
-      # Persist FAISS index and SQLite database
       - ./data/smart-router:/data
 
   # ---------------------------------------------------------------------------
-  # OpenWebUI - Web Interface
+  # SearXNG - Self-hosted Web Search Engine
   # ---------------------------------------------------------------------------
-  # Connects to Smart Router for intelligent routing and memory.
+  # Privacy-respecting metasearch engine that aggregates results from
+  # multiple search engines (Google, Bing, DuckDuckGo, etc.)
+  # Access: http://localhost:8080 (internal use by OpenWebUI)
+  # ---------------------------------------------------------------------------
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    networks: [ai-net]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+
+  # ---------------------------------------------------------------------------
+  # OpenWebUI - Web Interface with Web Search
+  # ---------------------------------------------------------------------------
+  # Connects to Smart Router and SearXNG for intelligent routing + web search
   # Access: http://localhost:3000
   # ---------------------------------------------------------------------------
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: openwebui
     restart: unless-stopped
-    depends_on: [router]
+    depends_on: [router, searxng]
     networks: [ai-net]
     ports:
       - "3000:8080"
     environment:
-      # Connect to Smart Router instead of Ollama directly
+      # Connect to Smart Router
       OPENAI_API_BASE_URL: http://router:8000/v1
       OPENAI_API_KEY: local-ai
+      # Enable Web Search with SearXNG
+      ENABLE_RAG_WEB_SEARCH: "true"
+      RAG_WEB_SEARCH_ENGINE: "searxng"
+      SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>&format=json"
     volumes:
       - ./data/openwebui:/app/backend/data
 
