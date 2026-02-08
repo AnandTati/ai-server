@@ -1,4 +1,4 @@
-#\!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 # AI Stack Bootstrap Script
 # =============================================================================
@@ -10,12 +10,11 @@
 # What it does:
 #   1. Creates data directories for persistent storage
 #   2. Starts Ollama service temporarily
-#   3. Pulls LLM models (2-model optimized setup):
-#      - deepseek-r1:14b  - For coding and complex reasoning
-#      - qwen3:8b         - For general chat and summarization
-#   4. Pulls embedding model for FAISS memory:
-#      - nomic-embed-text - Generates 768-dim vectors for semantic search
-#   5. Stops Ollama service
+#   3. Pulls LLM models (configured in models.env):
+#      - CODING_MODEL: For coding and complex reasoning
+#      - GENERAL_MODEL: For general chat and summarization
+#      - EMBEDDING_MODEL: For FAISS memory semantic search
+#   4. Starts all services
 #
 # Requirements:
 #   - Docker and Docker Compose installed
@@ -31,203 +30,141 @@
 
 set -euo pipefail
 
-# Get the directory where this script is located
+# Get script directory
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # =============================================================================
-# Model Configuration (2-Model Setup)
-# =============================================================================
-# Optimized for 12GB VRAM - only 2 LLM models needed
-# These MUST match docker-compose.yml environment variables
-
-# Coding model: DeepSeek-R1 14B
-# - Advanced reasoning capabilities (rivals O3/Gemini 2.5 Pro)
-# - Excellent for code generation, debugging, algorithms
-# - ~9GB VRAM
-CODING_MODEL="deepseek-r1:14b"
-
-# General model: Qwen3 8B
-# - Handles general conversation AND summarization
-# - Strong multilingual support
-# - ~5GB VRAM
-GENERAL_MODEL="qwen3:8b"
-
-# Embedding model: Nomic Embed Text
-# - Generates 768-dimensional vectors for semantic similarity
-# - Used by FAISS for conversation memory retrieval
-# - Lightweight (~274MB)
-EMBEDDING_MODEL="nomic-embed-text"
-
-# =============================================================================
-# Helper Functions
+# Load Configuration from models.env
 # =============================================================================
 
-print_status() {
-    echo ""
-    echo "=============================================="
-    echo "  $1"
-    echo "=============================================="
-}
+if [[ ! -f models.env ]]; then
+    echo "[ERROR] models.env file not found!"
+    echo "Please create models.env with model configuration."
+    exit 1
+fi
 
-print_info() {
-    echo "[INFO] $1"
-}
-
-print_error() {
-    echo "[ERROR] $1" >&2
-}
-
-# Wait for Ollama to be ready
-wait_for_ollama() {
-    print_info "Waiting for Ollama to be ready..."
-    local max_attempts=30
-    local attempt=1
-
-    while [ $attempt -le $max_attempts ]; do
-        if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
-            print_info "Ollama is ready\!"
-            return 0
-        fi
-        echo -n "."
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-
-    print_error "Ollama failed to start"
-    return 1
-}
-
-# Pull a model with progress indication
-pull_model() {
-    local model_name="$1"
-    local model_purpose="$2"
-
-    print_info "Pulling $model_purpose model: $model_name"
-    
-    if docker compose exec -T ollama ollama pull "$model_name"; then
-        print_info "Successfully pulled: $model_name"
-        return 0
-    else
-        print_error "Failed to pull: $model_name"
-        return 1
-    fi
-}
+# shellcheck source=/dev/null
+source models.env
 
 # =============================================================================
-# Pre-flight Checks
+# Display Configuration
 # =============================================================================
 
-print_status "AI Stack Bootstrap"
-
-command -v docker >/dev/null || { print_error "Docker is not installed"; exit 1; }
-docker compose version >/dev/null 2>&1 || { print_error "Docker Compose not available"; exit 1; }
+echo ""
+echo "=============================================="
+echo "  AI Stack Bootstrap"
+echo "=============================================="
+echo ""
+echo "Configuration from models.env:"
+echo "  Coding model:    ${CODING_MODEL}"
+echo "  General model:   ${GENERAL_MODEL}"
+echo "  Embedding model: ${EMBEDDING_MODEL}"
+echo ""
 
 # =============================================================================
 # Create Data Directories
 # =============================================================================
 
-print_status "Creating Data Directories"
-
+echo "[INFO] Creating data directories..."
 mkdir -p "$SCRIPT_DIR/data/ollama"
 mkdir -p "$SCRIPT_DIR/data/openwebui"
 mkdir -p "$SCRIPT_DIR/data/smart-router"
+mkdir -p "$SCRIPT_DIR/data/searxng"
 
-print_info "Data directories created:"
-print_info "  - data/ollama/        (model weights)"
-print_info "  - data/openwebui/     (user data)"
-print_info "  - data/smart-router/  (FAISS memory)"
+echo "[INFO] Data directories created:"
+echo "  - data/ollama/        (model weights)"
+echo "  - data/openwebui/     (user data)"
+echo "  - data/smart-router/  (FAISS memory)"
+echo "  - data/searxng/       (search config)"
 
 # =============================================================================
 # Start Ollama Service
 # =============================================================================
 
-print_status "Starting Ollama Service"
-
+echo ""
+echo "[INFO] Starting Ollama service..."
 docker compose up -d ollama
 
-if \! wait_for_ollama; then
-    print_error "Failed to start Ollama. Check: docker compose logs ollama"
+# Wait for Ollama to be ready
+echo "[INFO] Waiting for Ollama API..."
+max_attempts=30
+attempt=1
+
+while [ $attempt -le $max_attempts ]; do
+    if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+        echo "[INFO] Ollama is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -gt $max_attempts ]; then
+    echo ""
+    echo "[ERROR] Ollama failed to start. Check: docker compose logs ollama"
     exit 1
 fi
 
 # =============================================================================
-# Pull AI Models (2-Model Setup)
+# Pull AI Models
 # =============================================================================
 
-print_status "Pulling AI Models"
-print_info "2-model setup optimized for 12GB VRAM"
-print_info "This will download approximately 15GB of model data."
+echo ""
+echo "=============================================="
+echo "  Pulling AI Models"
+echo "=============================================="
+echo ""
+echo "This may take a while depending on your connection..."
+echo ""
 
 # Pull embedding model first (smallest, needed for memory)
-pull_model "$EMBEDDING_MODEL" "Embedding (FAISS memory)"
+echo "[INFO] Pulling embedding model: ${EMBEDDING_MODEL}..."
+docker exec ollama ollama pull "${EMBEDDING_MODEL}"
 
 # Pull LLM models
-pull_model "$CODING_MODEL" "Coding + Reasoning"
-pull_model "$GENERAL_MODEL" "General + Summarization"
+echo ""
+echo "[INFO] Pulling coding model: ${CODING_MODEL}..."
+docker exec ollama ollama pull "${CODING_MODEL}"
+
+echo ""
+echo "[INFO] Pulling general model: ${GENERAL_MODEL}..."
+docker exec ollama ollama pull "${GENERAL_MODEL}"
 
 # =============================================================================
 # Verify Models
 # =============================================================================
 
-print_status "Verifying Installed Models"
-docker compose exec -T ollama ollama list
+echo ""
+echo "=============================================="
+echo "  Installed Models"
+echo "=============================================="
+docker exec ollama ollama list
 
 # =============================================================================
-# Stop Ollama
+# Start All Services
 # =============================================================================
 
-print_status "Stopping Bootstrap Services"
-docker compose down
+echo ""
+echo "[INFO] Starting all services..."
+docker compose up -d
 
 # =============================================================================
 # Summary
 # =============================================================================
 
-print_status "Bootstrap Complete\!"
-
-echo "Models installed (2-model setup):"
-echo "  - $CODING_MODEL (coding + reasoning)"
-echo "  - $GENERAL_MODEL (general + summarization)"
-echo "  - $EMBEDDING_MODEL (FAISS memory)"
 echo ""
-echo "Data stored in: $SCRIPT_DIR/data/"
+echo "=============================================="
+echo "  Bootstrap Complete!"
+echo "=============================================="
 echo ""
-echo "Next steps:"
-echo "  1. Start the stack:    ./ai-on.sh"
-echo "  2. Open browser:       http://localhost:3000"
-echo "  3. Create account and start chatting\!"
+echo "Services running:"
+echo "  - OpenWebUI:    http://localhost:3000"
+echo "  - API Endpoint: http://localhost:8000/v1"
+echo "  - Ollama:       http://localhost:11434"
+echo "  - SearXNG:      http://localhost:8080"
 echo ""
-
-# =============================================================================
-# Cleanup Old Models
-# =============================================================================
-# Remove models that are no longer needed to free up disk space
-
-print_status "Cleaning Up Old Models"
-
-# List of models to keep
-KEEP_MODELS="$CODING_MODEL $GENERAL_MODEL $EMBEDDING_MODEL"
-
-# Get all installed models
-INSTALLED=$(docker compose exec -T ollama ollama list 2>/dev/null | tail -n +2 | awk "{print \$1}")
-
-for model in $INSTALLED; do
-    # Check if model should be kept
-    keep=false
-    for keep_model in $KEEP_MODELS; do
-        if [[ "$model" == "$keep_model" ]]; then
-            keep=true
-            break
-        fi
-    done
-    
-    if [[ "$keep" == "false" ]]; then
-        print_info "Removing unused model: $model"
-        docker compose exec -T ollama ollama rm "$model" 2>/dev/null || true
-    else
-        print_info "Keeping model: $model"
-    fi
-done
-
-print_info "Cleanup complete"
+echo "To change models, edit models.env and restart:"
+echo "  docker compose down && docker compose up -d"
+echo ""

@@ -9,9 +9,8 @@
 #   4. Whisper: Speech-to-text transcription
 #   5. SearXNG: Self-hosted web search engine
 #
-# Models (2-model setup for 12GB VRAM):
-#   - deepseek-r1:14b    - Coding + reasoning (~9GB)
-#   - qwen3:8b           - General + summarization (~5GB)
+# Configuration:
+#   All model settings are in models.env - edit that to change models
 #
 # Data stored in ./data/ for easy backup:
 #   - data/ollama/       Model weights (~20GB+)
@@ -34,6 +33,9 @@ services:
   # ---------------------------------------------------------------------------
   # Ollama - Local LLM Inference Engine
   # ---------------------------------------------------------------------------
+  # Runs large language models locally with GPU acceleration.
+  # OLLAMA_KEEP_ALIVE=-1 keeps models loaded indefinitely.
+  # ---------------------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -41,8 +43,6 @@ services:
     networks: [ai-net]
     volumes:
       - ./data/ollama:/root/.ollama
-    env_file:
-      - ./ollama/models.env
     environment:
       - OLLAMA_KEEP_ALIVE=-1
     ports:
@@ -58,22 +58,36 @@ services:
   # ---------------------------------------------------------------------------
   # Smart Router - Intelligent Query Routing with Memory
   # ---------------------------------------------------------------------------
+  # Routes queries to the appropriate model based on content analysis.
+  # Uses models.env for model configuration.
+  #
+  # Features:
+  #   - Keyword-based query classification
+  #   - FAISS-powered semantic search for context retrieval
+  #   - Cross-session conversation memory
+  #   - Auto URL fetching and web search
+  # ---------------------------------------------------------------------------
   router:
     build: ./smart-router
     container_name: ai-router
     restart: unless-stopped
     depends_on: [ollama]
     networks: [ai-net]
+    env_file:
+      - models.env
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - CODING_MODEL=deepseek-r1:14b
-      - GENERAL_MODEL=gemma2:9b
-      - EMBEDDING_MODEL=nomic-embed-text
+      # Data directory (inside container)
       - DATA_DIR=/data
     ports:
       - "8000:8000"
     volumes:
+      # Persist FAISS index and SQLite database
       - ./data/smart-router:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ---------------------------------------------------------------------------
   # SearXNG - Self-hosted Web Search Engine
@@ -124,9 +138,17 @@ services:
       SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>&format=json"
     volumes:
       - ./data/openwebui:/app/backend/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ---------------------------------------------------------------------------
   # Whisper - Speech-to-Text
+  # ---------------------------------------------------------------------------
+  # Transcribes audio to text using OpenAI Whisper model.
+  # Only accessible from localhost for security.
   # ---------------------------------------------------------------------------
   whisper:
     build: ./whisper
