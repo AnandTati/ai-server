@@ -27,6 +27,7 @@ A self-hosted AI stack with LLM-based intent detection, web search, and conversa
 - **Web Search** - Automatic web search via SearXNG for current information
 - **Conversation Memory** - FAISS-powered semantic memory across sessions
 - **Model Indicator** - Shows which model and intent handled each response
+- **Remote Coding Agent** - Use from any device on your network (see [CODING-AGENT.md](CODING-AGENT.md))
 - **OpenWebUI** - Chat interface at http://localhost:3000 (defaults to "auto")
 - **Whisper** - Speech-to-text transcription
 
@@ -407,6 +408,7 @@ ai-stack/
 ├── ai-on.sh / ai-off.sh        # Start/stop scripts
 ├── install-service.sh          # Systemd installer
 ├── ai-stack.service.template   # Service template
+├── CODING-AGENT.md             # Remote coding agent setup guide
 │
 ├── smart-router/               # Intelligent routing service
 │   ├── Dockerfile

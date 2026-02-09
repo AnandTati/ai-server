@@ -8,6 +8,7 @@ A self-hosted AI stack with intelligent LLM-based query routing, web search, and
 - **Web Search** - Automatic web search via SearXNG for current information queries
 - **Conversation Memory** - FAISS-powered semantic memory across sessions
 - **Model Indicator** - Shows which model and intent handled each response
+- **Remote Coding Agent** - Use from any device on your network ([setup guide](CODING-AGENT.md))
 - **Ollama** - Local LLM backend with GPU acceleration
 - **OpenWebUI** - Chat interface (defaults to "auto" routing)
 - **SearXNG** - Self-hosted privacy-respecting web search
@@ -300,6 +301,7 @@ ai-stack/
 ├── ai-stack.service.template   # Service template (portable)
 ├── README.md                   # This file
 ├── AI-STACK-GUIDE.md           # Detailed setup guide
+├── CODING-AGENT.md             # Remote coding agent setup
 │
 ├── smart-router/               # Intelligent routing service
 │   ├── Dockerfile
